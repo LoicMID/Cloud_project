@@ -1,215 +1,218 @@
-# coding in utf8 
-
-#Salut la team
-
-import numpy as np
-import pandas as pd
-import cv2
-from tqdm import tqdm
-import h5py
 import os
-from keras import Sequential
-from keras.layers import Dense,MaxPooling2D,Conv2D,Flatten,Dropout,Activation
-from keras.layers import BatchNormalization
-from sklearn import svm
-from sklearn.model_selection import cross_val_score
-import matplotlib.pyplot as plt
-from keras.preprocessing.image import ImageDataGenerator
-from oauth2client.client import GoogleCredentials
-from google.colab import files, drive, auth
-import csv
-#from keras.optimizers import RMSprop
+import zipfile
+import datetime
+
 import tensorflow as tf
-from keras.models import Input, Model
+from tensorflow import keras
 
-from keras import applications
-from keras.preprocessing.image import ImageDataGenerator
-from keras import optimizers
-from keras.models import Sequential, Model 
-from keras.layers import Dropout, Flatten, Dense, GlobalAveragePooling2D
-from keras import backend as k 
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler, TensorBoard, EarlyStopping
+from tensorflow.keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img # pour preprocessing img et plot img validation
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout
+from tensorflow.keras.models import Model # pour compilation model
+from tensorflow.keras.optimizers import SGD
 
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-drive.mount('/content/gdrive/')
-PATH = "/content/gdrive/My Drive/"
-os.listdir(PATH)
-if os.path.isfile(PATH+"clouds.zip") and not os.path.isdir("clouds"):
+# =============================================================================
+# PARAMETRES MODEL
+# =============================================================================
+
+data_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/" # directory for images
+print(os.listdir(data_dir))
+
+# Vérifier si le fichier ZIP existe et si le dossier de destination n'existe pas
+if os.path.isfile(data_dir + "clouds.zip") and not os.path.isdir(data_dir + "clouds"):
     print('unzip')
-    !unzip -q drive/My\ Drive/clouds.zip -d clouds #on dezip dans un repertoire
+    # Extraire le fichier ZIP
+    with zipfile.ZipFile(data_dir + "clouds.zip", 'r') as zip_ref:
+        zip_ref.extractall(data_dir + "clouds")  # Extraire dans un répertoire "clouds"
 else:
     print("data directory already ready")
 
 
-import os
-os.listdir("/content/gdrive/My Drive/")
+img_width, img_height = 256, 256
+nb_class = 4 # clear / partly couldy / couldy / haze
+class_names = ["clear","partly_couldy","cloudy","haze"]
+epoch_mod = 1 # nb de fois où les input sont pris en compte
+batch_size_mod = 128 # nb d'échantillons trait"s ensembles. Après avoir traité tout les lots = une époch complète
 
+save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/"
 
-ls()
+# =============================================================================
+# CREATION DATA IMG / TRAITEMENT IMG
+# =============================================================================
 
-
+# Creation objet pour creation data train et data valid
 train_data = ImageDataGenerator(
-#    horizontal_flip =True,
-#    vertical_flip = True,
-    rescale = 1./255, # Permet de déterminer la proportion de train/validation
-    #horizontal_flip = True,
-    #zoom_range = 0.15,
-    #width_shift_range = 0.15,
-    #height_shift_range=0.15,
-    #rotation_range=15,
-    validation_split = 0.25)
+    rescale = 1./255, # transformation valeurs rgb en float
+    validation_split = 0.25, # 25 % de data de validation
+    # horizontal_flip = True, # autre param de modif si besoin
+    # vertical_flip = True,
+    # zoom_range = 0.15,
+    # width_shift_range = 0.15,
+    # height_shift_range = 0.15,
+    # rotation_range = 15
+)
 
-# Permet d'acceder aux données d'un zip ultra rapidement
+# Creation objet pour creation data test
+test_data = ImageDataGenerator(
+    rescale=1./255
+    )
+
+# Appel de l'objet pour création data_train et data validation
+# Creation data train sur 75% data tot
 train_generator = train_data.flow_from_directory(
-        '/content/gdrive/My Drive/clouds/', # Lien des images dans le fichier zip (à adapter)
-        target_size=(256, 256),
-        color_mode='rgb',
-        batch_size=128,
-        shuffle = True,
-        class_mode="categorical")
+    data_dir,
+    target_size = (img_width,img_height),
+    color_mode = 'rgb',
+    batch_size = batch_size_mod, 
+    class_mode = "sparse", # fonction de perte => cross entropy
+    subset = "training", # "training" ou "validation"
+    shuffle = True,
+    )
 
-
-
-# 20% des données de Train (target + other)
+# Creation data validation sur 25% data tot
 valid_generator = train_data.flow_from_directory(
-        '/content/gdrive/My Drive/clouds/', 
-        target_size=(256, 256),
-        batch_size=128,
-        class_mode='categorical')
+    data_dir,
+    target_size = (img_width,img_height),
+    batch_size = batch_size_mod,
+    class_mode = "categorical",
+    subset = 'validation',
+    shuffle = True
+)
 
-
-test_data = ImageDataGenerator(rescale=1./255)
-
+# Creation data test
 test_generator = test_data.flow_from_directory(
-    directory='/content/gdrive/My Drive/clouds/',
+    data_dir,
     target_size=(256, 256) ,
     batch_size=1,
     #class_mode="binary",
     shuffle=False
 )
 
-print(len(test_generator.filenames))
 
+###### Afficher image ---------------------------------------------------------
+images, labels = next(train_generator)
 
+image = images[0]
+label = labels[0]
 
+class_index = np.argmax(label)
 
-num_classes=4
-img_width = 256
-img_height = 256
+plt.imshow(image)  
+plt.axis('off')  
+plt.show()  
+###### ------------------------------------------------------------------------
 
-#model = Sequential()  # Création d'un réseau de neurones vide 
+# =============================================================================
+# CREATION ARCHITECTURE MODEL
+# =============================================================================
 
-# Ajout de la première couche, suivie d'une couche ReLU
-model_in=Input(shape=[img_width, img_height, 3])
-#le model va prendre des matrices de taille 256*256 et on va le transformer en vecteurs de taille 128
-model=Conv2D(16,(5,5))(model_in)
-model=Activation('relu')(model)
-model=MaxPooling2D()(model)
+# Création d'un réseau de neurones vide 
+model = keras.models.Sequential()
 
-model=Conv2D(16,(3,3))(model_in)
-model=Activation('relu')(model)
-model=MaxPooling2D()(model)
+# Input 
+model_input = Input(shape=(img_width, img_height,3)) # 3 car RVB
 
-#model.add(Dropout(0.2)) #regularisation pr eviter le surapprentissage
+# 1ère couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(16, (5,5), padding = "same")(model_input)
+model = Activation("relu")(model)
+model = MaxPooling2D(pool_size=(2,2))(model)
+#regularisation pr eviter le surapprentissage, permet d'éteindre des neurones à chaque époch. Valeur = % de neurones à éteindre => à mettre entre couche dense et parfois entre couches convolutionelles
+model = Dropout(0.2)(model) 
 
-# Ajout de la deuxieme couche, suivie d'une couche ReLU
-#model.add(Dense(64, activation='relu'))
-model=Conv2D(32,(3,3))(model)
-model=Activation('relu')(model)
-model=MaxPooling2D()(model)
-#model.add(Dropout(0.2))
+# 2ème couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(64, (3,3), padding = "same")(model)
+model = Activation("relu")(model)
+model = MaxPooling2D(pool_size = (2,2))(model)
+model = Dropout(0.2)(model) 
 
-model=Flatten()(model)
+# 3ème couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(64, (3,3), padding = "same")(model)
+model = Activation("relu")(model)
+model = MaxPooling2D(pool_size = (2,2))(model)
+model = Dropout(0.2)(model) 
 
-#model=Dense(16,activation='relu')(model)
-#model=Dropout(0.2)(model)
+# 4ème couche : applatissement + couche Dense + activation ReLU + Dropout
+model = Flatten()(model)
+model = Dense(128)(model)
+model = Activation("relu")(model)
+model = Dropout(0.2)(model) 
 
-#derniere couche: softmax
-#model2=Dense(1, activation=tf.nn.softmax)(model2)
-model=Dense(num_classes, activation='softmax')(model)
-model_final = Model(model_in,model)
+# Output
+model = Dense(nb_class)(model)
+model_output = Activation("softmax")(model)
 
-
-
+# summary
+model_final = Model(model_input, model_output)
 model_final.summary()
-#model.add(Dense(num_classes, activation='sigmoid'))
 
+# =============================================================================
+# COMPILATION MODEL
+# =============================================================================
 
-epochs=3
-step_size_train=train_generator.n//train_generator.batch_size
-nb_validation_samples = valid_generator.n//valid_generator.batch_size//5
+model_final.compile(optimizer= SGD(learning_rate=0.001, momentum=0.9), # jouer sur les paramètres
+                    loss = "sparse_categorical_crossentropy", # RMSprop ??
+                    metrics = ["accuracy"]) # ajouter autre métriques ?
+# momentum = 90 % => Indique que 90 % de la mise à jour précédente sera pris en compte lors de la mise à jour actuelle des poids
+
+# =============================================================================
+# ENTRAINEMENT MODEL
+# =============================================================================
+
+step_size_train = train_generator.n//train_generator.batch_size # nombre d'étapes nécessaires pour parcourir l'ensemble des données d'entraînement en une époch
+lenght_valid = 5 # plus c'est haut et moin on a de data de validation
+nb_validation_samples = valid_generator.n//valid_generator.batch_size//lenght_valid # nb d'échantillons de validation utilisé pour validation en divisant encore si on veut une vitesse plus rapide
 print(step_size_train)
 print(nb_validation_samples)
 
-#Compilation 
-model_final.compile(loss='categorical_crossentropy',
-              optimizer="RMSprop", # to be checked 
-              metrics=['accuracy'])
+#### implémentation tensorboard -----------------------------------------------
+root_logdir = os.path.join(os.curdir, "my_logs")
+def get_run_logdir():
+ import time
+ run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+ return os.path.join(root_logdir, run_id)
+run_logdir = get_run_logdir()
+tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
+#### --------------------------------------------------------------------------
 
-model_final.fit_generator(
+history = model_final.fit(
               train_generator,
-              #samples_per_epoch = nb_train_samples,
-              steps_per_epoch=step_size_train,
-              epochs = epochs,
-              #validation_data = valid_generator,
-              #nb_val_samples = 10
-              #callbacks = [checkpoint]
+              steps_per_epoch=step_size_train, # nb étapes à effectuer dans chaque époque. Cela signifie que le modèle va traiter "step_size_train" lots d'échantillons par époch.
+              epochs = epoch_mod,
+              validation_data = valid_generator,
+              validation_steps=nb_validation_samples,
+              callbacks=[tensorboard_cb] # pour appel tensorboard
               )
 
-#score = model_final.evaluate(pre_data_train, pre_data_train_name)
-#print('Test loss:', score[0])
-#print('Test accuracy:', score[1])
+#### --------------------------------------------------------------------------
+# 1. éxécuter la commande dans la console : tensorboard --logdir=./my_logs --port=6006
+# 2. puis aller sur : http://localhost:6006
+# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
+#### --------------------------------------------------------------------------
+
+# Sauvegarder le modèle entraîné
+model_final.save(save_mod_dir + "cloud_classifier_model.h5")
+# model = keras.models.load_model("my_keras_model.h5") # pour load un model
+
+# =============================================================================
+# VALIDATION MODEL
+# =============================================================================
 
 
-#Affichage des prédictions
+# =============================================================================
+# EVALUATION MODEL
+# =============================================================================
 
-filenames = test_generator.filenames
-nb_samples = len(filenames)
-print(nb_samples)
+# val_loss, val_accuracy = model_final.evaluate(valid_generator)
+# print(f"Validation loss : {val_loss}")
+# print(f"Validation accuracy: {val_accuracy}")
 
-predict = model_final.predict_generator(test_generator,steps = nb_samples)
-print(predict)
+# => utiliser le modèle pour faire des prédictions
 
-from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img
+# retrouver labl img à partir de leurs directory
 
-# last_img = 17855
-last_img  = 10
-f = open('myfile.csv', 'w') 
-f.write("name;prediction\n")
-for i in range(last_img): 
-  filename = str(i)+".jpg"
-  img = load_img("/content/gdrive/My Drive/clouds/"+filename)  # this is a PIL image
-  x = img_to_array(img) 
-  x = x/255
-  x = x.reshape((1,) + x.shape) 
-  predict = model_final.predict(x)
-  #print(filename+";"+str(int(predict>.5)))
-  f.write(filename+";"+str(int(predict>.5))+"\n")
-f.close()
-files.download('myfile.csv')
-
-accuracy = history.history['acc']
-loss = history.history['loss']
-val_accuracy = history.history['val_acc']
-val_loss = history.history['val_loss']
-
-print(f'Training Accuracy: {np.max(accuracy)}')
-print(f'Training Loss: {np.min(loss)}')
-print(f'Validation Accuracy: {np.max(val_accuracy)}')
-print(f'Validation Loss: {np.min(val_loss)}')
-
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('Model accuracy')
-plt.ylabel('Accuracy')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Test'], loc='upper left')
-plt.show()
-
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('Model loss')
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Test'], loc='upper left')
-plt.show()
+# =============================================================================
+# FINE TUNE MODEL
+# =============================================================================
