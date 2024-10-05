@@ -1,4 +1,5 @@
 import os
+import sys
 import zipfile
 import datetime
 
@@ -63,34 +64,43 @@ test_data = ImageDataGenerator(
 # Appel de l'objet pour création data_train et data validation
 # Creation data train sur 75% data tot
 train_generator = train_data.flow_from_directory(
-    data_dir,
+    data_dir + "clouds",
     target_size = (img_width,img_height),
     color_mode = 'rgb',
     batch_size = batch_size_mod, 
-    class_mode = "sparse", # fonction de perte => cross entropy
+    class_mode = "categorical", # fonction de perte => cross entropy
     subset = "training", # "training" ou "validation"
     shuffle = True,
     )
 
 # Creation data validation sur 25% data tot
 valid_generator = train_data.flow_from_directory(
-    data_dir,
+    data_dir + "clouds",
     target_size = (img_width,img_height),
     batch_size = batch_size_mod,
     class_mode = "categorical",
     subset = 'validation',
-    shuffle = True
+    shuffle = False
 )
 
 # Creation data test
 test_generator = test_data.flow_from_directory(
-    data_dir,
+    data_dir + "clouds",
     target_size=(256, 256) ,
     batch_size=1,
     #class_mode="binary",
     shuffle=False
 )
 
+# nombre d'images pour chaque dataset
+print("train : ", len(train_generator.filenames))
+print("valid : ", len(valid_generator.filenames))
+print("test  : ", len(test_generator.filenames))
+
+# nb de classes détéctés
+print("nb classes : ", train_generator.class_indices)
+
+# A VOIR /!\ données déséquilibrés dans chaque classes ?! Si oui utiliser courbe precision/rappel pour validation
 
 ###### Afficher image ---------------------------------------------------------
 images, labels = next(train_generator)
@@ -115,28 +125,30 @@ model = keras.models.Sequential()
 # Input 
 model_input = Input(shape=(img_width, img_height,3)) # 3 car RVB
 
-# 1ère couche : convolution + activation ReLU + max-pooling + Dropout
+# 1ère couche - PARTIE 1 : convolution + activation ReLU + max-pooling + Dropout
 model = Conv2D(16, (5,5), padding = "same")(model_input)
 model = Activation("relu")(model)
-model = MaxPooling2D(pool_size=(2,2))(model)
+model = MaxPooling2D(pool_size=(2,2))(model) # 2,2 taille par défault
 #regularisation pr eviter le surapprentissage, permet d'éteindre des neurones à chaque époch. Valeur = % de neurones à éteindre => à mettre entre couche dense et parfois entre couches convolutionelles
 model = Dropout(0.2)(model) 
 
-# 2ème couche : convolution + activation ReLU + max-pooling + Dropout
-model = Conv2D(64, (3,3), padding = "same")(model)
+# 1ère couche - PARTIE 2: convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(16, (3,3), padding = "same")(model)
 model = Activation("relu")(model)
 model = MaxPooling2D(pool_size = (2,2))(model)
 model = Dropout(0.2)(model) 
 
-# 3ème couche : convolution + activation ReLU + max-pooling + Dropout
-model = Conv2D(64, (3,3), padding = "same")(model)
+# 2ème couche : Dense + activation ReLU + convolution + activation ReLU + max-pooling + Dropout
+model = Dense(64)(model)
+model = Activation("relu")(model)
+model = Conv2D(32, (3,3), padding = "same")(model)
 model = Activation("relu")(model)
 model = MaxPooling2D(pool_size = (2,2))(model)
 model = Dropout(0.2)(model) 
 
-# 4ème couche : applatissement + couche Dense + activation ReLU + Dropout
+# 3ème couche : applatissement + couche Dense + activation ReLU + Dropout
 model = Flatten()(model)
-model = Dense(128)(model)
+model = Dense(16)(model)
 model = Activation("relu")(model)
 model = Dropout(0.2)(model) 
 
@@ -153,7 +165,7 @@ model_final.summary()
 # =============================================================================
 
 model_final.compile(optimizer= SGD(learning_rate=0.001, momentum=0.9), # jouer sur les paramètres
-                    loss = "sparse_categorical_crossentropy", # RMSprop ??
+                    loss = "categorical_crossentropy", # RMSprop ??
                     metrics = ["accuracy"]) # ajouter autre métriques ?
 # momentum = 90 % => Indique que 90 % de la mise à jour précédente sera pris en compte lors de la mise à jour actuelle des poids
 
@@ -177,42 +189,89 @@ run_logdir = get_run_logdir()
 tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
 #### --------------------------------------------------------------------------
 
+#### --------------------------------------------------------------------------
+# 1. éxécuter la commande dans la console : !tensorboard --logdir=./my_logs --port=6006
+# 2. puis aller sur : http://localhost:6006
+# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
+# 4. ourvrir une nouvelle console pour l'éxécution du code
+#### --------------------------------------------------------------------------
+
+sys.exit()
+
+# option de réduction d'apprentissage lorsqu'il n'y a plus de progrès
+lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=10)
+
 history = model_final.fit(
               train_generator,
               steps_per_epoch=step_size_train, # nb étapes à effectuer dans chaque époque. Cela signifie que le modèle va traiter "step_size_train" lots d'échantillons par époch.
               epochs = epoch_mod,
               validation_data = valid_generator,
               validation_steps=nb_validation_samples,
-              callbacks=[tensorboard_cb] # pour appel tensorboard
+              callbacks=[tensorboard_cb] # pour appel tensorboard, on peut aussi ajouter notre lr_scheduler
               )
 
-#### --------------------------------------------------------------------------
-# 1. éxécuter la commande dans la console : tensorboard --logdir=./my_logs --port=6006
-# 2. puis aller sur : http://localhost:6006
-# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
-#### --------------------------------------------------------------------------
 
 # Sauvegarder le modèle entraîné
 model_final.save(save_mod_dir + "cloud_classifier_model.h5")
 # model = keras.models.load_model("my_keras_model.h5") # pour load un model
 
 # =============================================================================
-# VALIDATION MODEL
+# VALIDATION ET EVALUATION MODEL
 # =============================================================================
 
+# sur des données de validation
+val_loss, val_accuracy = model_final.evaluate(valid_generator)
+print(f"Validation loss : {val_loss}")
+print(f"Validation accuracy: {val_accuracy}")
 
-# =============================================================================
-# EVALUATION MODEL
-# =============================================================================
+# sur des données test
+test_loss, test_acc = model_final.evaluate(test_generator)
+print(f"Test loss: {test_loss}")
+print(f"Test accuracy: {test_acc}")
 
-# val_loss, val_accuracy = model_final.evaluate(valid_generator)
-# print(f"Validation loss : {val_loss}")
-# print(f"Validation accuracy: {val_accuracy}")
+# courbe precision/rappel pour validation si données déséquilibrés
 
-# => utiliser le modèle pour faire des prédictions
+
+# Tracer la courbe d'entraînement et de validation
+plt.plot(history.history['accuracy'], label='train accuracy')
+plt.plot(history.history['val_accuracy'], label='val accuracy')
+plt.title('Training and validation accuracy')
+plt.legend()
+plt.show()
+
+plt.plot(history.history['loss'], label='train loss')
+plt.plot(history.history['val_loss'], label='val loss')
+plt.title('Training and validation loss')
+plt.legend()
+plt.show()
+
+# 
+
+
+
+
+
+
+
+
 
 # retrouver labl img à partir de leurs directory
 
-# =============================================================================
-# FINE TUNE MODEL
-# =============================================================================
+
+# last_img = 17855
+# last_img  = 10
+# f = open('myfile.csv', 'w') 
+# f.write("name;prediction\n")
+# for i in range(last_img): 
+#   filename = str(i)+".jpg"
+#   img = load_img("/content/gdrive/My Drive/clouds/"+filename)  # this is a PIL image
+#   x = img_to_array(img) 
+#   x = x/255
+#   x = x.reshape((1,) + x.shape) 
+#   predict = model_final.predict(x)
+#   #print(filename+";"+str(int(predict>.5)))
+#   f.write(filename+";"+str(int(predict>.5))+"\n")
+# f.close()
+# files.download('myfile.csv')
+
+
