@@ -1,7 +1,6 @@
 import os
 import sys
 import zipfile
-import datetime
 
 import tensorflow as tf
 from tensorflow import keras
@@ -11,10 +10,10 @@ from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense,
 from tensorflow.keras.models import Model # pour compilation model
 from tensorflow.keras.optimizers import SGD
 
-from sklearn.model_selection import cross_val_score # pour validation model
-from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc # pour evaluation prédiction model
+from sklearn.model_selection import cross_val_predict, cross_val_score # pour validation model
+from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc, f1_score, precision_score, recall_score # pour evaluation prédiction model
+from sklearn.linear_model import SGDClassifier
 
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -59,8 +58,8 @@ else:
 img_width, img_height = 256, 256
 nb_class = 4 # clear / partly couldy / couldy / haze
 class_names = ["clear","partly_couldy","cloudy","haze"]
-epoch_mod = 3 # nb de fois où les input sont pris en compte
-batch_size_mod = 128 # nb d'échantillons trait"s ensembles. Après avoir traité tout les lots = une époch complète
+epoch_mod = 10 # nb de fois où les input sont pris en compte
+batch_size_mod = 128 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète
 
 save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/"
 
@@ -92,7 +91,7 @@ train_generator = train_data.flow_from_directory(
     batch_size = batch_size_mod, 
     class_mode = "sparse", # fonction de perte => cross entropy
     subset = "training", # "training" ou "validation"
-    shuffle = True,
+    shuffle = True, #  empeche le modèle d'apprendre sur ordre des échantillons
     )
 
 # Creation data validation sur 25% data tot
@@ -115,10 +114,10 @@ test_data = ImageDataGenerator(
 # Creation data test
 test_generator = test_data.flow_from_directory(
     data_dir + "clouds",
-    target_size=(256, 256) ,
-    batch_size=1,
-    #class_mode="binary",
-    shuffle=False
+    target_size = (256, 256),
+    batch_size = 1,
+    class_mode = "sparse",
+    shuffle = False
 )
 
 # nombre d'images pour chaque dataset
@@ -242,86 +241,188 @@ model_final.save(save_mod_dir + "cloud_classifier_model.h5")
 # model = keras.models.load_model("my_keras_model.h5") # pour load un model
 
 # =============================================================================
-# VALIDATION ET EVALUATION MODEL
+# VALIDATION MODEL
 # =============================================================================
 
 # /!\ Implementer cross validation !!!
-nb_k_folds = 3
-# cross_val_score(, , , cv=nb_k_folds, scoring="accuracy")
 
 # VALIDATION sur des données de validation
-val_loss, val_accuracy = model_final.evaluate(valid_generator)
-print(f"Validation loss : {val_loss}")
-print(f"Validation accuracy: {val_accuracy}")
+valid_loss, valid_accuracy = model_final.evaluate(valid_generator)
+print(f"Validation loss : {valid_loss}")
+print(f"Validation accuracy: {valid_accuracy}")
 
-# VALIDATION sur des données test
-test_loss, test_acc = model_final.evaluate(test_generator)
-print(f"Test loss: {test_loss}")
-print(f"Test accuracy: {test_acc}")
+# VALIDATION sur des données de test
+test_loss, test_accuracy = model_final.evaluate(test_generator)
+print(f"test loss : {test_loss}")
+print(f"test accuracy: {test_accuracy}")
 
-# Tracer la courbe d'entraînement et de validation
+# Tracer la courbe d'entraînement et de validation => historique du modèle
 plt.plot(history.history['accuracy'], label='train accuracy')
-plt.plot(history.history['val_accuracy'], label='val accuracy')
+plt.plot(history.history['valid_accuracy'], label='valid accuracy')
 plt.title('Training and validation accuracy')
 plt.legend()
 plt.show()
 
 plt.plot(history.history['loss'], label='train loss')
-plt.plot(history.history['val_loss'], label='val loss')
+plt.plot(history.history['valid_loss'], label='val loss')
 plt.title('Training and validation loss')
 plt.legend()
 plt.show()
 
 # =============================================================================
-# PREDICTIONS
+# EVALUATION ET PREDICTIONS
 # =============================================================================
 
-# récupérer proba de chaque classe
-nb_predictions = 1000
-class_predi_prob = model_final.predict(test_generator, steps=1000)
+# faisons un binary classifier pour chaque classe
+# clear : 0, 
+# cloudy : 1
+# haze : 2
+# partly_cloudy : 3
 
-# sortir la classe majoritaire
-class_predi = np.argmax(class_predi_prob, axis=1)
-class_true = test_generator.classes  # Les vraies class
+# nb_images = 40479
+taille_lot_img = 1000
+
+# recreaton generator juste pour moduler taille lots
+train_generator = test_data.flow_from_directory(
+    data_dir + "clouds",
+    target_size = (256, 256),
+    batch_size = 1000//2,
+    class_mode = "sparse",
+    shuffle = True
+    )
+
+# Creation data test
+test_generator = test_data.flow_from_directory(
+    data_dir + "clouds",
+    target_size = (256, 256),
+    batch_size = 1000//2,
+    class_mode = "sparse",
+    shuffle = False
+)
+
+images_train, labels_train = next(train_generator) # 500 éléments = taille du batch
+images_test, labels_test = next(test_generator) # 500 éléments = taille du batch
+
+# Aplatir les images pour le classificateur
+n_samples, height, width, n_channels = images_train.shape
+images_train_flat = images_train.reshape(n_samples, height * width * n_channels)
+
+# Appliquer la même transformation sur le test
+n_samples_test = images_test.shape[0]
+images_test_flat = images_test.reshape(n_samples_test, height * width * n_channels)
+
+Y_train = labels_train
+Y_test = labels_test
+
+y_train_0 = (labels_train == 0) 
+y_test_0 = (labels_test == 0)
+
+y_train_1 = (labels_train == 1) 
+y_test_1 = (labels_test == 1)
+
+y_train_2 = (labels_train == 2) 
+y_test_2 = (labels_test == 2)
+
+y_train_3 = (labels_train == 3) 
+y_test_3 = (labels_test == 3)
+
+y_train = [y_train_0,y_train_1,y_train_2,y_train_3]
+
+# binary classifier pour chaque classe
+sgd_clf = SGDClassifier(random_state=42) # seed
+
+# exemple binary classifier pour classer les clears
+some_img = images_train_flat[0] # img
+sgd_clf.fit(images_train_flat, y_train_0) # apprentissage
+sgd_clf.predict([some_img]) # prediction sur une image
+
+nb_k_folds = 3
+# test validation croisée
+cross_val_score(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds, scoring="accuracy")
+
 
 ###### EVALUATION sur données test
-### 1. Matrice de confusion 
-conf_matrix = confusion_matrix(class_true, class_predi) # Total
-print(conf_matrix)
+### 1. Matrice de confusion  ----------------------------------------------------------------------------------------------------------------
 
-# possible de faire ça sur chaque classe
+# TOT
+y_train_pred_tot = cross_val_predict(sgd_clf, images_train_flat, Y_train, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(Y_train, y_train_pred_tot)
 
-### 2. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici)
-precision_score = precision_score(class_true, class_predi)
-recall_score = recall_score(y_train_5, y_train_pred)
+# clear : 0
+y_train_pred_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_0, y_train_pred_0)
 
-precision, recall, _ = precision_recall_curve(class_true, class_predi_prob) # total
+# cloudy : 1
+y_train_pred_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_1, y_train_pred_1)
 
-# Tracer la courbe
-plt.figure(figsize=(10, 6))
-plt.plot(recall, precision, marker='.')
-plt.title('Courbe de Précision-Rappel')
-plt.xlabel('Rappel')
-plt.ylabel('Précision')
-plt.grid()
-plt.show()
-# (F1 Score additionnel)
+# haze : 2
+y_train_pred_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_2, y_train_pred_2)
 
-### 3 courbe ROC et AUC
-# Calculer FPR et TPR pour la classe 1
-fpr, tpr, _ = roc_curve(y_true, y_scores_class_1)
-roc_auc = auc(fpr, tpr)  # Calculer l'aire sous la courbe (AUC)
+# partly_cloudy : 3
+y_train_pred_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_3, y_train_pred_3)
 
-# Tracer la courbe ROC
-plt.figure(figsize=(10, 6))
-plt.plot(fpr, tpr, color='blue', label='AUC = %0.2f' % roc_auc)
-plt.plot([0, 1], [0, 1], color='red', linestyle='--')  # Ligne de chance
-plt.title('Courbe ROC')
-plt.xlabel('Taux de faux positifs (FPR)')
-plt.ylabel('Taux de vrais positifs (TPR)')
-plt.legend(loc='lower right')
-plt.grid()
-plt.show()
+
+### 2. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici) --------------------------------------------------
+## score ----------------------------------------------------------------------
+
+# TOT
+precision_score(Y_train, y_train_pred_tot)
+recall_score(Y_train, y_train_pred_tot)
+
+# clear : 0
+precision_score(y_train_0, y_train_pred_0)
+recall_score(y_train_0, y_train_pred_0)
+
+# cloudy : 1
+precision_score(y_train_1, y_train_pred_1)
+recall_score(y_train_1, y_train_pred_1)
+
+# haze : 2
+precision_score(y_train_2, y_train_pred_2)
+recall_score(y_train_2, y_train_pred_2)
+
+# partly_cloudy : 3
+precision_score(y_train_3, y_train_pred_3)
+recall_score(y_train_3, y_train_pred_3)
+
+## fig avec seuil : à faire + comprendre --------------------------------------
+y_scores_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=3,method="decision_function")
+y_scores_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=3,method="decision_function")
+y_scores_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=3,method="decision_function")
+y_scores_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=3,method="decision_function")
+
+y_scores = [y_scores_0,y_scores_1,y_scores_2,y_scores_3]
+
+## curve : à faire ------------------------------------------------------------
+# [...]
+
+### 3. ROC curve et AUC -----------------------------------------------------------------------------------------------------------------------------
+def plot_roc_curve(fpr, tpr, label=None):
+ plt.plot(fpr, tpr, linewidth=2, label=label)
+ plt.plot([0, 1], [0, 1], 'k--') # dashed diagonal
+
+for i in range(nb_class):
+    fpr, tpr, thresholds = roc_curve(y_train[i], y_scores[i])
+    plot_roc_curve(fpr, tpr)
+    plt.title(f"ROC curve class {i}")
+    plt.show()
+
+
+# (4. f1 score = mesure de précision aditionnel) ----------------------------------------------------------------------------------------------------
+# clear : 0
+f1_score(y_train_0, y_train_pred_0)
+
+# cloudy : 1
+f1_score(y_train_1, y_train_pred_1)
+
+# haze : 2
+f1_score(y_train_2, y_train_pred_2)
+
+# partly_cloudy : 3
+f1_score(y_train_3, y_train_pred_3)
 
 
 
