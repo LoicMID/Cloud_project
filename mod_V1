@@ -11,9 +11,33 @@ from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense,
 from tensorflow.keras.models import Model # pour compilation model
 from tensorflow.keras.optimizers import SGD
 
+from sklearn.model_selection import cross_val_score # pour validation model
+from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc # pour evaluation prédiction model
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+
+#### implémentation tensorboard -----------------------------------------------
+root_logdir = os.path.join(os.curdir, "my_logs")
+def get_run_logdir():
+ import time
+ run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+ return os.path.join(root_logdir, run_id)
+run_logdir = get_run_logdir()
+tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
+#### --------------------------------------------------------------------------
+
+#### --------------------------------------------------------------------------
+# 1. éxécuter la commande dans la console : !tensorboard --logdir=./my_logs --port=6006
+# 2. puis aller sur : http://localhost:6006
+# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
+# 4. ourvrir une nouvelle console pour l'éxécution du code
+#### --------------------------------------------------------------------------
+
+sys.exit()
+
+#### EXECUTER A PARTIR DE LA APRES
 
 # =============================================================================
 # PARAMETRES MODEL
@@ -35,7 +59,7 @@ else:
 img_width, img_height = 256, 256
 nb_class = 4 # clear / partly couldy / couldy / haze
 class_names = ["clear","partly_couldy","cloudy","haze"]
-epoch_mod = 1 # nb de fois où les input sont pris en compte
+epoch_mod = 3 # nb de fois où les input sont pris en compte
 batch_size_mod = 128 # nb d'échantillons trait"s ensembles. Après avoir traité tout les lots = une époch complète
 
 save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/"
@@ -43,6 +67,8 @@ save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/"
 # =============================================================================
 # CREATION DATA IMG / TRAITEMENT IMG
 # =============================================================================
+
+### DATA TRAIN ET VALID 
 
 # Creation objet pour creation data train et data valid
 train_data = ImageDataGenerator(
@@ -56,10 +82,6 @@ train_data = ImageDataGenerator(
     # rotation_range = 15
 )
 
-# Creation objet pour creation data test
-test_data = ImageDataGenerator(
-    rescale=1./255
-    )
 
 # Appel de l'objet pour création data_train et data validation
 # Creation data train sur 75% data tot
@@ -68,7 +90,7 @@ train_generator = train_data.flow_from_directory(
     target_size = (img_width,img_height),
     color_mode = 'rgb',
     batch_size = batch_size_mod, 
-    class_mode = "categorical", # fonction de perte => cross entropy
+    class_mode = "sparse", # fonction de perte => cross entropy
     subset = "training", # "training" ou "validation"
     shuffle = True,
     )
@@ -78,10 +100,17 @@ valid_generator = train_data.flow_from_directory(
     data_dir + "clouds",
     target_size = (img_width,img_height),
     batch_size = batch_size_mod,
-    class_mode = "categorical",
+    class_mode = "sparse",
     subset = 'validation',
     shuffle = False
 )
+
+### DATA TEST
+
+# Creation objet pour creation data test
+test_data = ImageDataGenerator(
+    rescale=1./255
+    )
 
 # Creation data test
 test_generator = test_data.flow_from_directory(
@@ -100,7 +129,21 @@ print("test  : ", len(test_generator.filenames))
 # nb de classes détéctés
 print("nb classes : ", train_generator.class_indices)
 
-# A VOIR /!\ données déséquilibrés dans chaque classes ?! Si oui utiliser courbe precision/rappel pour validation
+# A VOIR /!\ données déséquilibrés dans chaque classes ?! Si oui utiliser courbe precision/rappel pour validation :
+class_folders = os.listdir(data_dir + "clouds")
+
+# Compter les fichiers dans chaque sous-dossier (classe)
+for class_folder in class_folders:
+    class_path = os.path.join(data_dir + "clouds", class_folder)
+    if os.path.isdir(class_path):
+        file_count = len([f for f in os.listdir(class_path) if os.path.isfile(os.path.join(class_path, f))])
+        print(f"Classe {class_folder}: {file_count} images")
+
+# classe fortement déséquilibré pour clear et un peu pour partly_cloudy
+# Classe clear: 28432 images
+# Classe cloudy: 2089 images
+# Classe haze: 2697 images
+# Classe partly_cloudy: 7261 images
 
 ###### Afficher image ---------------------------------------------------------
 images, labels = next(train_generator)
@@ -111,8 +154,13 @@ label = labels[0]
 class_index = np.argmax(label)
 
 plt.imshow(image)  
-plt.axis('off')  
-plt.show()  
+plt.axis('off')
+plt.title(round(label))
+plt.show()
+# clear : 0, 
+# cloudy : 1
+# haze : 2
+# partly_cloudy : 3
 ###### ------------------------------------------------------------------------
 
 # =============================================================================
@@ -138,9 +186,7 @@ model = Activation("relu")(model)
 model = MaxPooling2D(pool_size = (2,2))(model)
 model = Dropout(0.2)(model) 
 
-# 2ème couche : Dense + activation ReLU + convolution + activation ReLU + max-pooling + Dropout
-model = Dense(64)(model)
-model = Activation("relu")(model)
+# 2ème couche : convolution + activation ReLU + max-pooling + Dropout
 model = Conv2D(32, (3,3), padding = "same")(model)
 model = Activation("relu")(model)
 model = MaxPooling2D(pool_size = (2,2))(model)
@@ -165,7 +211,7 @@ model_final.summary()
 # =============================================================================
 
 model_final.compile(optimizer= SGD(learning_rate=0.001, momentum=0.9), # jouer sur les paramètres
-                    loss = "categorical_crossentropy", # RMSprop ??
+                    loss = "sparse_categorical_crossentropy", # RMSprop ??
                     metrics = ["accuracy"]) # ajouter autre métriques ?
 # momentum = 90 % => Indique que 90 % de la mise à jour précédente sera pris en compte lors de la mise à jour actuelle des poids
 
@@ -179,25 +225,6 @@ nb_validation_samples = valid_generator.n//valid_generator.batch_size//lenght_va
 print(step_size_train)
 print(nb_validation_samples)
 
-#### implémentation tensorboard -----------------------------------------------
-root_logdir = os.path.join(os.curdir, "my_logs")
-def get_run_logdir():
- import time
- run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
- return os.path.join(root_logdir, run_id)
-run_logdir = get_run_logdir()
-tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
-#### --------------------------------------------------------------------------
-
-#### --------------------------------------------------------------------------
-# 1. éxécuter la commande dans la console : !tensorboard --logdir=./my_logs --port=6006
-# 2. puis aller sur : http://localhost:6006
-# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
-# 4. ourvrir une nouvelle console pour l'éxécution du code
-#### --------------------------------------------------------------------------
-
-sys.exit()
-
 # option de réduction d'apprentissage lorsqu'il n'y a plus de progrès
 lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=10)
 
@@ -207,9 +234,8 @@ history = model_final.fit(
               epochs = epoch_mod,
               validation_data = valid_generator,
               validation_steps=nb_validation_samples,
-              callbacks=[tensorboard_cb] # pour appel tensorboard, on peut aussi ajouter notre lr_scheduler
+              callbacks=[tensorboard_cb] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter notre lr_scheduler
               )
-
 
 # Sauvegarder le modèle entraîné
 model_final.save(save_mod_dir + "cloud_classifier_model.h5")
@@ -219,18 +245,19 @@ model_final.save(save_mod_dir + "cloud_classifier_model.h5")
 # VALIDATION ET EVALUATION MODEL
 # =============================================================================
 
-# sur des données de validation
+# /!\ Implementer cross validation !!!
+nb_k_folds = 3
+# cross_val_score(, , , cv=nb_k_folds, scoring="accuracy")
+
+# VALIDATION sur des données de validation
 val_loss, val_accuracy = model_final.evaluate(valid_generator)
 print(f"Validation loss : {val_loss}")
 print(f"Validation accuracy: {val_accuracy}")
 
-# sur des données test
+# VALIDATION sur des données test
 test_loss, test_acc = model_final.evaluate(test_generator)
 print(f"Test loss: {test_loss}")
 print(f"Test accuracy: {test_acc}")
-
-# courbe precision/rappel pour validation si données déséquilibrés
-
 
 # Tracer la courbe d'entraînement et de validation
 plt.plot(history.history['accuracy'], label='train accuracy')
@@ -245,33 +272,56 @@ plt.title('Training and validation loss')
 plt.legend()
 plt.show()
 
-# 
+# =============================================================================
+# PREDICTIONS
+# =============================================================================
 
+# récupérer proba de chaque classe
+nb_predictions = 1000
+class_predi_prob = model_final.predict(test_generator, steps=1000)
 
+# sortir la classe majoritaire
+class_predi = np.argmax(class_predi_prob, axis=1)
+class_true = test_generator.classes  # Les vraies class
 
+###### EVALUATION sur données test
+### 1. Matrice de confusion 
+conf_matrix = confusion_matrix(class_true, class_predi) # Total
+print(conf_matrix)
 
+# possible de faire ça sur chaque classe
 
+### 2. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici)
+precision_score = precision_score(class_true, class_predi)
+recall_score = recall_score(y_train_5, y_train_pred)
 
+precision, recall, _ = precision_recall_curve(class_true, class_predi_prob) # total
 
+# Tracer la courbe
+plt.figure(figsize=(10, 6))
+plt.plot(recall, precision, marker='.')
+plt.title('Courbe de Précision-Rappel')
+plt.xlabel('Rappel')
+plt.ylabel('Précision')
+plt.grid()
+plt.show()
+# (F1 Score additionnel)
 
+### 3 courbe ROC et AUC
+# Calculer FPR et TPR pour la classe 1
+fpr, tpr, _ = roc_curve(y_true, y_scores_class_1)
+roc_auc = auc(fpr, tpr)  # Calculer l'aire sous la courbe (AUC)
 
-# retrouver labl img à partir de leurs directory
+# Tracer la courbe ROC
+plt.figure(figsize=(10, 6))
+plt.plot(fpr, tpr, color='blue', label='AUC = %0.2f' % roc_auc)
+plt.plot([0, 1], [0, 1], color='red', linestyle='--')  # Ligne de chance
+plt.title('Courbe ROC')
+plt.xlabel('Taux de faux positifs (FPR)')
+plt.ylabel('Taux de vrais positifs (TPR)')
+plt.legend(loc='lower right')
+plt.grid()
+plt.show()
 
-
-# last_img = 17855
-# last_img  = 10
-# f = open('myfile.csv', 'w') 
-# f.write("name;prediction\n")
-# for i in range(last_img): 
-#   filename = str(i)+".jpg"
-#   img = load_img("/content/gdrive/My Drive/clouds/"+filename)  # this is a PIL image
-#   x = img_to_array(img) 
-#   x = x/255
-#   x = x.reshape((1,) + x.shape) 
-#   predict = model_final.predict(x)
-#   #print(filename+";"+str(int(predict>.5)))
-#   f.write(filename+";"+str(int(predict>.5))+"\n")
-# f.close()
-# files.download('myfile.csv')
 
 
