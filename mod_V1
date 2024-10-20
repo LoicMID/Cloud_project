@@ -1,42 +1,25 @@
 import os
 import sys
 import zipfile
+from datetime import datetime
 
 import tensorflow as tf
 from tensorflow import keras
+import tensorflow_addons as tfa
 
 from tensorflow.keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img # pour preprocessing img et plot img validation
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout
 from tensorflow.keras.models import Model # pour compilation model
 from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.optimizers import RMSprop
 
 from sklearn.model_selection import cross_val_predict, cross_val_score # pour validation model
 from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc, f1_score, precision_score, recall_score # pour evaluation prédiction model
 from sklearn.linear_model import SGDClassifier
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-
-#### implémentation tensorboard -----------------------------------------------
-root_logdir = os.path.join(os.curdir, "my_logs")
-def get_run_logdir():
- import time
- run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
- return os.path.join(root_logdir, run_id)
-run_logdir = get_run_logdir()
-tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
-#### --------------------------------------------------------------------------
-
-#### --------------------------------------------------------------------------
-# 1. éxécuter la commande dans la console : !tensorboard --logdir=./my_logs --port=6006
-# 2. puis aller sur : http://localhost:6006
-# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
-# 4. ourvrir une nouvelle console pour l'éxécution du code
-#### --------------------------------------------------------------------------
-
-sys.exit()
-
-#### EXECUTER A PARTIR DE LA APRES
 
 # =============================================================================
 # PARAMETRES MODEL
@@ -54,14 +37,13 @@ if os.path.isfile(data_dir + "clouds.zip") and not os.path.isdir(data_dir + "clo
 else:
     print("data directory already ready")
 
-
 img_width, img_height = 256, 256
 nb_class = 4 # clear / partly couldy / couldy / haze
 class_names = ["clear","partly_couldy","cloudy","haze"]
-epoch_mod = 10 # nb de fois où les input sont pris en compte
+epoch_mod = 2 # nb de fois où les input sont pris en compte
 batch_size_mod = 128 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète
 
-save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/"
+save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/models_trained/"
 
 # =============================================================================
 # CREATION DATA IMG / TRAITEMENT IMG
@@ -144,6 +126,8 @@ for class_folder in class_folders:
 # Classe haze: 2697 images
 # Classe partly_cloudy: 7261 images
 
+#### /!\ Dataset assez grand pour ne pas avoir à faire de la validation croisée !
+
 ###### Afficher image ---------------------------------------------------------
 images, labels = next(train_generator)
 
@@ -209,65 +193,120 @@ model_final.summary()
 # COMPILATION MODEL
 # =============================================================================
 
-model_final.compile(optimizer= SGD(learning_rate=0.001, momentum=0.9), # jouer sur les paramètres
-                    loss = "sparse_categorical_crossentropy", # RMSprop ??
-                    metrics = ["accuracy"]) # ajouter autre métriques ?
+# COMPILATION AVEC SGD
+# model_final.compile(optimizer= SGD(learning_rate=0.001, momentum=0.9), # jouer sur les paramètres
+#                     loss = "sparse_categorical_crossentropy",
+#                     metrics = ["accuracy"]) # ajouter autre métriques ?
+
 # momentum = 90 % => Indique que 90 % de la mise à jour précédente sera pris en compte lors de la mise à jour actuelle des poids
+
+# COMPILATION AVEC RSMPROP (permet d'ajuste le taux d'apprentissage en continu)
+
+model_final.compile(optimizer=RMSprop(learning_rate=0.001, rho=0.9),  # rho de RMSprop joue le même rôle que le momentum : 
+                    loss="sparse_categorical_crossentropy",
+                    metrics = [
+                    'accuracy',
+                    tfa.metrics.F1Score(num_classes=num_classes, average='macro'),  # ou 'micro' selon votre besoin
+                    tfa.metrics.CohenKappa(),
+                    tfa.metrics.Precision(),
+                    tfa.metrics.Recall()
+                    ]
+                    )
 
 # =============================================================================
 # ENTRAINEMENT MODEL
 # =============================================================================
 
-step_size_train = train_generator.n//train_generator.batch_size # nombre d'étapes nécessaires pour parcourir l'ensemble des données d'entraînement en une époch
-lenght_valid = 5 # plus c'est haut et moin on a de data de validation
-nb_validation_samples = valid_generator.n//valid_generator.batch_size//lenght_valid # nb d'échantillons de validation utilisé pour validation en divisant encore si on veut une vitesse plus rapide
-print(step_size_train)
-print(nb_validation_samples)
+## si bug tensorboard : 
+# - kill processus : netstat -aon | findstr :6006 ##### puis : taskkill /PID <PID> /F
+# - relancer le code : F5
+
+#### implémentation tensorboard -----------------------------------------------
+root_logdir = os.path.join(os.curdir, "my_logs")
+def get_run_logdir():
+ import time
+ run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+ return os.path.join(root_logdir, run_id)
+run_logdir = get_run_logdir()
+tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
+#### --------------------------------------------------------------------------
+
+# Lancer TensorBoard automatiquement
+%reload_ext tensorboard
+%tensorboard --logdir ./my_logs --port=6006
 
 # option de réduction d'apprentissage lorsqu'il n'y a plus de progrès
-lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=10)
+lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=4)
 
+# entrainemtn du model
 history = model_final.fit(
               train_generator,
-              steps_per_epoch=step_size_train, # nb étapes à effectuer dans chaque époque. Cela signifie que le modèle va traiter "step_size_train" lots d'échantillons par époch.
               epochs = epoch_mod,
               validation_data = valid_generator,
-              validation_steps=nb_validation_samples,
-              callbacks=[tensorboard_cb] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter notre lr_scheduler
+              callbacks=[tensorboard_cb,lr_scheduler] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter lr_scheduler
               )
 
+#### --------------------------------------------------------------------------
+# 1. Aller sur : http://localhost:6006
+# 2. mettre en temps réel les calculs dans paramètres Tensorboard
+# attention les courbe en opacité basse sont les valeurs réelle. En couleur c'est juste un smooth
+#### --------------------------------------------------------------------------
+
 # Sauvegarder le modèle entraîné
-model_final.save(save_mod_dir + "cloud_classifier_model.h5")
+date_str = datetime.now().strftime("%d_%m")  # JJ_MM
+model_final.save(save_mod_dir + f"cloud_classifier_model_{date_str}.h5")
 # model = keras.models.load_model("my_keras_model.h5") # pour load un model
+
+sys.exit()
 
 # =============================================================================
 # VALIDATION MODEL
 # =============================================================================
 
-# /!\ Implementer cross validation !!!
+# VALIDATION sur des données de validation 
 
-# VALIDATION sur des données de validation
-valid_loss, valid_accuracy = model_final.evaluate(valid_generator)
-print(f"Validation loss : {valid_loss}")
-print(f"Validation accuracy: {valid_accuracy}")
-
-# VALIDATION sur des données de test
-test_loss, test_accuracy = model_final.evaluate(test_generator)
-print(f"test loss : {test_loss}")
-print(f"test accuracy: {test_accuracy}")
-
-# Tracer la courbe d'entraînement et de validation => historique du modèle
+# Evolution accuracy => historique du modèle
+# capacité à bien prédire qui évolue
 plt.plot(history.history['accuracy'], label='train accuracy')
-plt.plot(history.history['valid_accuracy'], label='valid accuracy')
+plt.plot(history.history['val_accuracy'], label='valid accuracy')
 plt.title('Training and validation accuracy')
 plt.legend()
 plt.show()
 
+# Evolution Fonction de perte (CE) => historique du modèle
 plt.plot(history.history['loss'], label='train loss')
-plt.plot(history.history['valid_loss'], label='val loss')
+plt.plot(history.history['val_loss'], label='val loss')
 plt.title('Training and validation loss')
 plt.legend()
 plt.show()
+
+# Evolution Précision
+plt.plot(history.history['precision'], label='Precision')
+plt.plot(history.history['val_precision'], label='Validation Precision')
+plt.title('Training and Validation Precision')
+plt.legend()
+plt.show()
+
+# Evolution Rappel
+plt.plot(history.history['recall'], label='Recall')
+plt.plot(history.history['val_recall'], label='Validation Recall')
+plt.title('Training and Validation Recall')
+plt.legend()
+plt.show()
+
+# Evolution F1 Score
+plt.plot(history.history['f1_score'], label='F1 Score')
+plt.plot(history.history['val_f1_score'], label='Validation F1 Score')
+plt.title('Training and Validation F1 Score')
+plt.legend()
+plt.show()
+
+# interprétation fct loss : 
+#    - Train + valid diminue => good apprentissage 
+#    - Train diminue + valid ré-augmente => Overfitting
+#    - Train et valid restent haut => Underfitting (modèle trop simple)
+#    - Fluctuation Train et Valid +> Lamda trop élevé ou mauvaises data valid
+
 
 # =============================================================================
 # EVALUATION ET PREDICTIONS
@@ -279,14 +318,12 @@ plt.show()
 # haze : 2
 # partly_cloudy : 3
 
-# nb_images = 40479
-taille_lot_img = 1000
-
+# a changer quand code malo à jour
 # recreaton generator juste pour moduler taille lots
 train_generator = test_data.flow_from_directory(
     data_dir + "clouds",
     target_size = (256, 256),
-    batch_size = 1000//2,
+    batch_size = 500,
     class_mode = "sparse",
     shuffle = True
     )
@@ -295,7 +332,7 @@ train_generator = test_data.flow_from_directory(
 test_generator = test_data.flow_from_directory(
     data_dir + "clouds",
     target_size = (256, 256),
-    batch_size = 1000//2,
+    batch_size = 500,
     class_mode = "sparse",
     shuffle = False
 )
@@ -331,9 +368,10 @@ y_train = [y_train_0,y_train_1,y_train_2,y_train_3]
 # binary classifier pour chaque classe
 sgd_clf = SGDClassifier(random_state=42) # seed
 
-# exemple binary classifier pour classer les clears
+# exemple binary classifier pour classer les clears "0"
 some_img = images_train_flat[0] # img
-sgd_clf.fit(images_train_flat, y_train_0) # apprentissage
+sgd_clf.fit(images_train_flat, 
+            y_train_0) # apprentissage
 sgd_clf.predict([some_img]) # prediction sur une image
 
 nb_k_folds = 3
@@ -342,31 +380,41 @@ cross_val_score(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds, scoring="a
 
 
 ###### EVALUATION sur données test
-### 1. Matrice de confusion  ----------------------------------------------------------------------------------------------------------------
+### 1. Accuracy
+test_loss, test_accuracy = model_final.evaluate(test_generator)
+print(f"Test loss : {test_loss}")
+print(f"Test accuracy: {test_accuracy}")
+
+### 2. Matrice de confusion  ----------------------------------------------------------------------------------------------------------------
 
 # TOT
 y_train_pred_tot = cross_val_predict(sgd_clf, images_train_flat, Y_train, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
 confusion_matrix(Y_train, y_train_pred_tot)
 
 # clear : 0
-y_train_pred_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+y_train_pred_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds) 
 confusion_matrix(y_train_0, y_train_pred_0)
 
 # cloudy : 1
-y_train_pred_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+y_train_pred_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=nb_k_folds) 
 confusion_matrix(y_train_1, y_train_pred_1)
 
 # haze : 2
-y_train_pred_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+y_train_pred_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=nb_k_folds) 
 confusion_matrix(y_train_2, y_train_pred_2)
 
 # partly_cloudy : 3
-y_train_pred_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+y_train_pred_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=nb_k_folds)
 confusion_matrix(y_train_3, y_train_pred_3)
 
 
-### 2. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici) --------------------------------------------------
+### 3. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici) --------------------------------------------------
 ## score ----------------------------------------------------------------------
+# Precision = proportion des vrais positifs
+# Rapell/sensibilité = proportion des vrais positifs parmi toutes les instances qui sont réellement positives (vrai positif + faux négatif)
+
+# Précision élevée :  lorsque le modèle prédit une instance comme positive, il a raison dans une grande majorité des cas.
+# Rappel élevé : le modèle détecte la plupart des instances positives, même si cela signifie qu'il peut aussi classer certaines instances négatives comme positives.
 
 # TOT
 precision_score(Y_train, y_train_pred_tot)
@@ -389,6 +437,8 @@ precision_score(y_train_3, y_train_pred_3)
 recall_score(y_train_3, y_train_pred_3)
 
 ## fig avec seuil : à faire + comprendre --------------------------------------
+# Dans un contexte de classification binaire, le seuil détermine à partir de quelle probabilité on considère qu'une observation appartient à la classe positive.
+# par défault, seuil = 0.5
 y_scores_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=3,method="decision_function")
 y_scores_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=3,method="decision_function")
 y_scores_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=3,method="decision_function")
@@ -399,7 +449,7 @@ y_scores = [y_scores_0,y_scores_1,y_scores_2,y_scores_3]
 ## curve : à faire ------------------------------------------------------------
 # [...]
 
-### 3. ROC curve et AUC -----------------------------------------------------------------------------------------------------------------------------
+### 4. ROC curve et AUC -----------------------------------------------------------------------------------------------------------------------------
 def plot_roc_curve(fpr, tpr, label=None):
  plt.plot(fpr, tpr, linewidth=2, label=label)
  plt.plot([0, 1], [0, 1], 'k--') # dashed diagonal
@@ -411,7 +461,9 @@ for i in range(nb_class):
     plt.show()
 
 
-# (4. f1 score = mesure de précision aditionnel) ----------------------------------------------------------------------------------------------------
+# 5. f1 score = = moyenne harmonique de la précision et du rappel ----------------------------------------------------------------------------------------------------
+# Le score F1 permet de mieux évaluer la capacité du modèle à identifier correctement la/les classe(s) minoritaire(s)
+
 # clear : 0
 f1_score(y_train_0, y_train_pred_0)
 
