@@ -5,13 +5,12 @@ from datetime import datetime
 
 import tensorflow as tf
 from tensorflow import keras
-import tensorflow_addons as tfa
+# import tensorflow_addons as tfa # nécessite version tensorflow antèrieur : pip install tensorflow==2.13.0
 
 from tensorflow.keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img # pour preprocessing img et plot img validation
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout
 from tensorflow.keras.models import Model # pour compilation model
-from tensorflow.keras.optimizers import SGD
-from tensorflow.keras.optimizers import RMSprop
+from tensorflow.keras.optimizers import SGD, RMSprop
 
 from sklearn.model_selection import cross_val_predict, cross_val_score # pour validation model
 from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc, f1_score, precision_score, recall_score # pour evaluation prédiction model
@@ -20,6 +19,9 @@ from sklearn.linear_model import SGDClassifier
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Ici classification multiclass. Cas multilabel si plusieurs classes peuvent être ensembles
 
 # =============================================================================
 # PARAMETRES MODEL
@@ -40,7 +42,7 @@ else:
 img_width, img_height = 256, 256
 nb_class = 4 # clear / partly couldy / couldy / haze
 class_names = ["clear","partly_couldy","cloudy","haze"]
-epoch_mod = 2 # nb de fois où les input sont pris en compte
+epoch_mod = 3 # nb de fois où les input sont pris en compte
 batch_size_mod = 128 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète
 
 save_mod_dir = "C:/Users/User/Desktop/MASTER/M2/MLB/PROJET/models_trained/"
@@ -86,26 +88,11 @@ valid_generator = train_data.flow_from_directory(
     shuffle = False
 )
 
-### DATA TEST
-
-# Creation objet pour creation data test
-test_data = ImageDataGenerator(
-    rescale=1./255
-    )
-
-# Creation data test
-test_generator = test_data.flow_from_directory(
-    data_dir + "clouds",
-    target_size = (256, 256),
-    batch_size = 1,
-    class_mode = "sparse",
-    shuffle = False
-)
 
 # nombre d'images pour chaque dataset
 print("train : ", len(train_generator.filenames))
 print("valid : ", len(valid_generator.filenames))
-print("test  : ", len(test_generator.filenames))
+# print("test  : ", len(test_generator.filenames))
 
 # nb de classes détéctés
 print("nb classes : ", train_generator.class_indices)
@@ -206,10 +193,10 @@ model_final.compile(optimizer=RMSprop(learning_rate=0.001, rho=0.9),  # rho de R
                     loss="sparse_categorical_crossentropy",
                     metrics = [
                     'accuracy',
-                    tfa.metrics.F1Score(num_classes=num_classes, average='macro'),  # ou 'micro' selon votre besoin
-                    tfa.metrics.CohenKappa(),
-                    tfa.metrics.Precision(),
-                    tfa.metrics.Recall()
+                    # tfa.metrics.F1Score(num_classes=num_classes, average='macro'),  # ou 'micro' selon votre besoin
+                    # tfa.metrics.CohenKappa(),
+                    # tfa.metrics.Precision(),
+                    # tfa.metrics.Recall()
                     ]
                     )
 
@@ -238,12 +225,26 @@ tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
 # option de réduction d'apprentissage lorsqu'il n'y a plus de progrès
 lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=4)
 
+# changer les poids pour réequilibrer
+# Nombre d'images par classe
+class_counts = {
+    'clear': 28432,
+    'cloudy': 2089,
+    'haze': 2697,
+    'partly_cloudy': 7261}
+
+# Calcule le poids de chaque classe. Poids de la classe= total_images/ nombre de classes x nombre d’images dans la classe
+total_images = sum(class_counts.values())
+class_weights_mod = {i: total_images / (len(class_counts) * count) for i, count in enumerate(class_counts.values())}
+print("Poids :", class_weights)
+
 # entrainemtn du model
 history = model_final.fit(
               train_generator,
               epochs = epoch_mod,
               validation_data = valid_generator,
-              callbacks=[tensorboard_cb,lr_scheduler] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter lr_scheduler
+              callbacks=[tensorboard_cb,lr_scheduler], # tensorboard_cb pour appel tensorboard. On peut aussi ajouter lr_scheduler
+              class_weight = class_weights_mod
               )
 
 #### --------------------------------------------------------------------------
@@ -280,26 +281,32 @@ plt.title('Training and validation loss')
 plt.legend()
 plt.show()
 
+# Evolution learning_rate => historique du modèle
+plt.plot(history.history['learning_rate'], label='learning_rate')
+plt.title('learning_rate')
+plt.legend()
+plt.show()
+
 # Evolution Précision
-plt.plot(history.history['precision'], label='Precision')
-plt.plot(history.history['val_precision'], label='Validation Precision')
-plt.title('Training and Validation Precision')
-plt.legend()
-plt.show()
+# plt.plot(history.history['precision'], label='Precision')
+# plt.plot(history.history['val_precision'], label='Validation Precision')
+# plt.title('Training and Validation Precision')
+# plt.legend()
+# plt.show()
 
-# Evolution Rappel
-plt.plot(history.history['recall'], label='Recall')
-plt.plot(history.history['val_recall'], label='Validation Recall')
-plt.title('Training and Validation Recall')
-plt.legend()
-plt.show()
+# # Evolution Rappel
+# plt.plot(history.history['recall'], label='Recall')
+# plt.plot(history.history['val_recall'], label='Validation Recall')
+# plt.title('Training and Validation Recall')
+# plt.legend()
+# plt.show()
 
-# Evolution F1 Score
-plt.plot(history.history['f1_score'], label='F1 Score')
-plt.plot(history.history['val_f1_score'], label='Validation F1 Score')
-plt.title('Training and Validation F1 Score')
-plt.legend()
-plt.show()
+# # Evolution F1 Score
+# plt.plot(history.history['f1_score'], label='F1 Score')
+# plt.plot(history.history['val_f1_score'], label='Validation F1 Score')
+# plt.title('Training and Validation F1 Score')
+# plt.legend()
+# plt.show()
 
 # interprétation fct loss : 
 #    - Train + valid diminue => good apprentissage 
@@ -309,75 +316,34 @@ plt.show()
 
 
 # =============================================================================
-# EVALUATION ET PREDICTIONS
+# PREDICTIONS ET EVALUATION
 # =============================================================================
 
-# faisons un binary classifier pour chaque classe
 # clear : 0, 
 # cloudy : 1
 # haze : 2
 # partly_cloudy : 3
 
 # a changer quand code malo à jour
-# recreaton generator juste pour moduler taille lots
-train_generator = test_data.flow_from_directory(
-    data_dir + "clouds",
-    target_size = (256, 256),
-    batch_size = 500,
-    class_mode = "sparse",
-    shuffle = True
+
+### DATA TEST
+# Creation objet pour creation data test
+test_data = ImageDataGenerator(
+    rescale=1./255
     )
 
 # Creation data test
 test_generator = test_data.flow_from_directory(
     data_dir + "clouds",
     target_size = (256, 256),
-    batch_size = 500,
+    batch_size = batch_size_mod,
     class_mode = "sparse",
-    shuffle = False
+    shuffle = True
 )
 
-images_train, labels_train = next(train_generator) # 500 éléments = taille du batch
-images_test, labels_test = next(test_generator) # 500 éléments = taille du batch
-
-# Aplatir les images pour le classificateur
-n_samples, height, width, n_channels = images_train.shape
-images_train_flat = images_train.reshape(n_samples, height * width * n_channels)
-
-# Appliquer la même transformation sur le test
-n_samples_test = images_test.shape[0]
-images_test_flat = images_test.reshape(n_samples_test, height * width * n_channels)
-
-Y_train = labels_train
-Y_test = labels_test
-
-y_train_0 = (labels_train == 0) 
-y_test_0 = (labels_test == 0)
-
-y_train_1 = (labels_train == 1) 
-y_test_1 = (labels_test == 1)
-
-y_train_2 = (labels_train == 2) 
-y_test_2 = (labels_test == 2)
-
-y_train_3 = (labels_train == 3) 
-y_test_3 = (labels_test == 3)
-
-y_train = [y_train_0,y_train_1,y_train_2,y_train_3]
-
-# binary classifier pour chaque classe
-sgd_clf = SGDClassifier(random_state=42) # seed
-
-# exemple binary classifier pour classer les clears "0"
-some_img = images_train_flat[0] # img
-sgd_clf.fit(images_train_flat, 
-            y_train_0) # apprentissage
-sgd_clf.predict([some_img]) # prediction sur une image
-
-nb_k_folds = 3
-# test validation croisée
-cross_val_score(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds, scoring="accuracy")
-
+# PREDICTIONS : 
+y_test_pred = model_final.predict(test_generator)
+y_test_pred_classes = np.argmax(y_test_pred, axis=1)
 
 ###### EVALUATION sur données test
 ### 1. Accuracy
@@ -387,94 +353,79 @@ print(f"Test accuracy: {test_accuracy}")
 
 ### 2. Matrice de confusion  ----------------------------------------------------------------------------------------------------------------
 
-# TOT
-y_train_pred_tot = cross_val_predict(sgd_clf, images_train_flat, Y_train, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
-confusion_matrix(Y_train, y_train_pred_tot)
+### TOTALE : 
+# rows represent actual classes, while columns represent predicted classes
+y_test_true = test_generator.classes # Récupérer vrais labels
 
-# clear : 0
-y_train_pred_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds) 
-confusion_matrix(y_train_0, y_train_pred_0)
+conf_matrix = confusion_matrix(y_test_true, y_test_pred_classes)
+print(conf_matrix)
 
-# cloudy : 1
-y_train_pred_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=nb_k_folds) 
-confusion_matrix(y_train_1, y_train_pred_1)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', 
+            xticklabels=class_names, yticklabels=class_names)
+plt.title('Matrice de Confusion')
+plt.xlabel('Prédictions')
+plt.ylabel('classe réelles')
+plt.show()
 
-# haze : 2
-y_train_pred_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=nb_k_folds) 
-confusion_matrix(y_train_2, y_train_pred_2)
+### POUR CHAQUE CLASSE : 
+for i in range(nb_class):
+    TP = conf_matrix[i, i]  # Vrais positifs
+    FP = conf_matrix[:, i].sum() - TP  # Faux positifs
+    FN = conf_matrix[i, :].sum() - TP  # Faux négatifs
+    TN = conf_matrix.sum() - (FP + FN + TP)  # Vrais négatifs
+    
+    print(f"Classe {class_names[i]} :")
+    print(f"  Vrais Positifs (TP): {TP}")
+    print(f"  Faux Positifs (FP): {FP}")
+    print(f"  Faux Négatifs (FN): {FN}")
+    print(f"  Vrais Négatifs (TN): {TN}")
+    print(" ")
 
-# partly_cloudy : 3
-y_train_pred_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=nb_k_folds)
-confusion_matrix(y_train_3, y_train_pred_3)
+for i in range(nb_class):
+    # Créer une matrice de confusion pour chaque classe
+    class_conf_matrix = np.zeros((2, 2), dtype=int)
+    class_conf_matrix[0, 0] = conf_matrix[i, i]  # TP
+    class_conf_matrix[0, 1] = conf_matrix[:, i].sum() - class_conf_matrix[0, 0]  # FP
+    class_conf_matrix[1, 0] = conf_matrix[i, :].sum() - class_conf_matrix[0, 0]  # FN
+    class_conf_matrix[1, 1] = conf_matrix.sum() - (class_conf_matrix[0, 1] + class_conf_matrix[1, 0] + class_conf_matrix[0, 0])  # TN
+
+    # Visualisation
+    plt.figure(figsize=(5, 4))
+    sns.heatmap(class_conf_matrix, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Prédit Positif', 'Prédit Négatif'], 
+                yticklabels=['Réel Positif', 'Réel Négatif'])
+    plt.title(f'Matrice de Confusion pour la Classe : {class_names[i]}')
+    plt.xlabel('Prédictions')
+    plt.ylabel('Véritables Étiquettes')
+    plt.show()
 
 
-### 3. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici) --------------------------------------------------
+### 3. courbe precision/rappel pour validation si données déséquilibrés (c'est le cas ici) --------------------------------------------------
 ## score ----------------------------------------------------------------------
-# Precision = proportion des vrais positifs
-# Rapell/sensibilité = proportion des vrais positifs parmi toutes les instances qui sont réellement positives (vrai positif + faux négatif)
-
-# Précision élevée :  lorsque le modèle prédit une instance comme positive, il a raison dans une grande majorité des cas.
-# Rappel élevé : le modèle détecte la plupart des instances positives, même si cela signifie qu'il peut aussi classer certaines instances négatives comme positives.
+# A. Precision = proportion des vrais positifs
+# A. Précision élevée :  lorsque le modèle prédit une instance comme positive, il a raison dans une grande majorité des cas.
+# B. Rapell/sensibilité = proportion des vrais positifs parmi toutes les instances qui sont réellement positives (vrai positif + faux négatif)
+# B. Rappel élevé : le modèle détecte la plupart des instances positives, même si cela signifie qu'il peut aussi classer certaines instances négatives comme positives.
 
 # TOT
-precision_score(Y_train, y_train_pred_tot)
-recall_score(Y_train, y_train_pred_tot)
 
-# clear : 0
-precision_score(y_train_0, y_train_pred_0)
-recall_score(y_train_0, y_train_pred_0)
 
-# cloudy : 1
-precision_score(y_train_1, y_train_pred_1)
-recall_score(y_train_1, y_train_pred_1)
-
-# haze : 2
-precision_score(y_train_2, y_train_pred_2)
-recall_score(y_train_2, y_train_pred_2)
-
-# partly_cloudy : 3
-precision_score(y_train_3, y_train_pred_3)
-recall_score(y_train_3, y_train_pred_3)
-
-## fig avec seuil : à faire + comprendre --------------------------------------
+## SEUIL --------------------------------------
 # Dans un contexte de classification binaire, le seuil détermine à partir de quelle probabilité on considère qu'une observation appartient à la classe positive.
 # par défault, seuil = 0.5
-y_scores_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=3,method="decision_function")
-y_scores_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=3,method="decision_function")
-y_scores_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=3,method="decision_function")
-y_scores_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=3,method="decision_function")
 
-y_scores = [y_scores_0,y_scores_1,y_scores_2,y_scores_3]
 
 ## curve : à faire ------------------------------------------------------------
 # [...]
 
 ### 4. ROC curve et AUC -----------------------------------------------------------------------------------------------------------------------------
-def plot_roc_curve(fpr, tpr, label=None):
- plt.plot(fpr, tpr, linewidth=2, label=label)
- plt.plot([0, 1], [0, 1], 'k--') # dashed diagonal
-
-for i in range(nb_class):
-    fpr, tpr, thresholds = roc_curve(y_train[i], y_scores[i])
-    plot_roc_curve(fpr, tpr)
-    plt.title(f"ROC curve class {i}")
-    plt.show()
 
 
 # 5. f1 score = = moyenne harmonique de la précision et du rappel ----------------------------------------------------------------------------------------------------
 # Le score F1 permet de mieux évaluer la capacité du modèle à identifier correctement la/les classe(s) minoritaire(s)
 
-# clear : 0
-f1_score(y_train_0, y_train_pred_0)
 
-# cloudy : 1
-f1_score(y_train_1, y_train_pred_1)
-
-# haze : 2
-f1_score(y_train_2, y_train_pred_2)
-
-# partly_cloudy : 3
-f1_score(y_train_3, y_train_pred_3)
 
 
 
