@@ -1,215 +1,689 @@
-# coding in utf8 
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+import sys
+import zipfile
 
-#Salut la team
+import tensorflow as tf
+from tensorflow import keras
+
+from tensorflow.keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img # pour preprocessing img et plot img validation
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout
+from tensorflow.keras.models import Model # pour compilation model
+from tensorflow.keras.optimizers import SGD
+
+from sklearn.model_selection import cross_val_predict, cross_val_score # pour validation model
+from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc, f1_score, precision_score, recall_score # pour evaluation prédiction model
+from sklearn.linear_model import SGDClassifier
 
 import numpy as np
-import pandas as pd
-import cv2
-from tqdm import tqdm
-import h5py
-import os
-from keras import Sequential
-from keras.layers import Dense,MaxPooling2D,Conv2D,Flatten,Dropout,Activation
-from keras.layers import BatchNormalization
-from sklearn import svm
-from sklearn.model_selection import cross_val_score
 import matplotlib.pyplot as plt
-from keras.preprocessing.image import ImageDataGenerator
-from oauth2client.client import GoogleCredentials
-from google.colab import files, drive, auth
-import csv
-#from keras.optimizers import RMSprop
-import tensorflow as tf
-from keras.models import Input, Model
+import shutil # pour copier coller les fichiers de clouds vers organized_clouds
+from sklearn.model_selection import train_test_split # pour separer jeu de donnees en train vs test
+import random
 
-from keras import applications
-from keras.preprocessing.image import ImageDataGenerator
-from keras import optimizers
-from keras.models import Sequential, Model 
-from keras.layers import Dropout, Flatten, Dense, GlobalAveragePooling2D
-from keras import backend as k 
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler, TensorBoard, EarlyStopping
+### implémentation tensorboard -----------------------------------------------
+root_logdir = os.path.join(os.curdir, "my_logs")
+def get_run_logdir():
+  import time
+  run_id = time.strftime("run_%Y_%m_%d-%H_%M_%S")
+  return os.path.join(root_logdir, run_id)
+run_logdir = get_run_logdir()
+tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
+### --------------------------------------------------------------------------
+
+#### --------------------------------------------------------------------------
+# 1. éxécuter la commande dans la console : !tensorboard --logdir=./my_logs --port=6006
+# 2. puis aller sur : http://localhost:6006
+# (3. mettre en temps réel les calculs dans paramètres Tensorboard)
+# 4. ourvrir une nouvelle console pour l'éxécution du code
+#### --------------------------------------------------------------------------
 
 
-drive.mount('/content/gdrive/')
-PATH = "/content/gdrive/My Drive/"
-os.listdir(PATH)
-if os.path.isfile(PATH+"clouds.zip") and not os.path.isdir("clouds"):
+#### EXECUTER A PARTIR DE LA APRES
+
+# =============================================================================
+# PARAMETRES MODEL
+# =============================================================================
+
+#chemin pour acceder aux donnees originales
+data_dir = "C:/Users/theop/Desktop/Malo/M2/cours/programmes_M2/" 
+print(os.listdir(data_dir))
+
+# chemin pour creer dataset organisé
+organized_dir = "C:/Users/theop/Desktop/Malo/M2/cours/programmes_M2/organized_clouds"
+
+#chemin pour creer dataset organisé et augmenté
+augmented_dir = "C:/Users/theop/Desktop/Malo/M2/cours/programmes_M2/augmented_clouds"
+
+#chemin pour sauvegarder le modele
+save_mod_dir = "C:/Users/theop/Desktop/Malo/M2/cours/programmes_M2/"
+
+
+#Definition parametres
+class_names = ["clear", "partly_cloudy", "cloudy", "haze"]  # Names of the classes in the dataset
+img_width, img_height = 256, 256
+nb_class = 4 # clear / partly couldy / couldy / haze
+epoch_mod = 10 # nb de fois où les input sont pris en compte
+batch_size_mod = 128 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète
+
+
+# Vérifier si le fichier ZIP existe et si le dossier de destination n'existe pas
+if os.path.isfile(data_dir + "clouds.zip") and not os.path.isdir(data_dir + "clouds"):
     print('unzip')
-    !unzip -q drive/My\ Drive/clouds.zip -d clouds #on dezip dans un repertoire
+    # Extraire le fichier ZIP
+    with zipfile.ZipFile(data_dir + "clouds.zip", 'r') as zip_ref:
+        zip_ref.extractall(data_dir + "clouds")  # Extraire dans un répertoire "clouds"
 else:
     print("data directory already ready")
-
-
-import os
-os.listdir("/content/gdrive/My Drive/")
-
-
-ls()
-
-
-train_data = ImageDataGenerator(
-#    horizontal_flip =True,
-#    vertical_flip = True,
-    rescale = 1./255, # Permet de déterminer la proportion de train/validation
-    #horizontal_flip = True,
-    #zoom_range = 0.15,
-    #width_shift_range = 0.15,
-    #height_shift_range=0.15,
-    #rotation_range=15,
-    validation_split = 0.25)
-
-# Permet d'acceder aux données d'un zip ultra rapidement
-train_generator = train_data.flow_from_directory(
-        '/content/gdrive/My Drive/clouds/', # Lien des images dans le fichier zip (à adapter)
-        target_size=(256, 256),
-        color_mode='rgb',
-        batch_size=128,
-        shuffle = True,
-        class_mode="categorical")
+    
+# Creation seed pour reproductibilité de l'aleatoire 
+random_seed = 42 #choix arbitraire de 42 
+np.random.seed(random_seed)  # renseignement de la seed au generateur de nombres aleatoires de NumPy
+random.seed(random_seed)  # renseignement de la seed au module aleatoire intege de base dans python
 
 
 
-# 20% des données de Train (target + other)
-valid_generator = train_data.flow_from_directory(
-        '/content/gdrive/My Drive/clouds/', 
-        target_size=(256, 256),
-        batch_size=128,
-        class_mode='categorical')
+# A VOIR /!\ données déséquilibrés dans chaque classes ?! Si oui utiliser courbe precision/rappel pour validation :
+class_folders = os.listdir(data_dir + "clouds")
+
+# Compter les fichiers dans chaque sous-dossier (classe)
+for class_folder in class_folders:
+    class_path = os.path.join(data_dir + "clouds", class_folder)
+    if os.path.isdir(class_path):
+        file_count = len([f for f in os.listdir(class_path) if os.path.isfile(os.path.join(class_path, f))])
+        print(f"Classe {class_folder}: {file_count} images")
+
+# classe fortement déséquilibré pour clear et un peu pour partly_cloudy
+# Classe clear: 28432 images
+# Classe cloudy: 2089 images
+# Classe haze: 2697 images
+# Classe partly_cloudy: 7261 images
 
 
-test_data = ImageDataGenerator(rescale=1./255)
+# =============================================================================
+# CREATION DATA IMG / TRAITEMENT IMG
+# =============================================================================
 
-test_generator = test_data.flow_from_directory(
-    directory='/content/gdrive/My Drive/clouds/',
-    target_size=(256, 256) ,
-    batch_size=1,
-    #class_mode="binary",
-    shuffle=False
+###Separation des donnees Test vs Train vs Validation
+
+# demander si il faut remplacer le dossier organized_clouds
+if os.path.exists(organized_dir):
+    user_response = input(f"'{organized_dir}' existe déjà. Voulez-vous le remplacer? (oui/non): ").strip().lower()
+    if user_response == "oui":
+        replace_organized_folder = True
+    else:
+        replace_organized_folder = False
+else:
+    replace_organized_folder = True
+        
+# si dossier organized_clouds à remplacer ou recréer:
+if replace_organized_folder:
+    if os.path.exists(organized_dir):
+        shutil.rmtree(organized_dir)  # supprime le dossier organized_clouds si il existe
+        print(f"Suppression du dossier {organized_dir}")
+        
+    # Création des dossiers train, test, et validation
+    os.makedirs(os.path.join(organized_dir, 'train'), exist_ok=True)  # Dossier pour train
+    os.makedirs(os.path.join(organized_dir, 'test'), exist_ok=True)   # Dossier pour test
+    os.makedirs(os.path.join(organized_dir, 'valid'), exist_ok=True)  # Dossier pour validation
+    
+    # Ratios pour les splits
+    train_ratio = 0.7  # 70% pour train
+    valid_ratio = 0.15  # 15% pour validation
+    test_ratio = 0.15  # 15% pour test
+    
+    # Boucle pour séparer les images dans chaque classe
+    for class_name in class_names:
+        class_path = os.path.join(data_dir + "clouds", class_name)  # Chemin vers le dossier de classe actuel
+        images = os.listdir(class_path)  # Liste de toutes les images du dossier
+        
+        # Vérification de la présence d'images dans le dossier
+        if len(images) == 0:
+            print(f"Pas d'image trouvée dans le dossier de la classe {class_path}. Saut de cette classe.")
+            continue  # Passe à la classe suivante s'il n'y a pas d'images
+            
+        # Séparation des images en trois ensembles : train, validation, et test
+        train_images, valid_test_images = train_test_split(images, train_size=train_ratio, random_state=random_seed)
+        valid_images, test_images = train_test_split(valid_test_images, test_size=test_ratio/(valid_ratio + test_ratio), random_state=random_seed)
+        
+        # Création des sous-dossiers pour chaque classe dans train, validation et test
+        os.makedirs(os.path.join(organized_dir, 'train', class_name), exist_ok=True)
+        os.makedirs(os.path.join(organized_dir, 'valid', class_name), exist_ok=True)
+        os.makedirs(os.path.join(organized_dir, 'test', class_name), exist_ok=True)
+
+        # Copier les images dans les dossiers correspondants
+        for img in train_images:
+            shutil.copy2(os.path.join(class_path, img), os.path.join(organized_dir, 'train', class_name, img))
+        for img in valid_images:
+            shutil.copy2(os.path.join(class_path, img), os.path.join(organized_dir, 'valid', class_name, img))
+        for img in test_images:
+            shutil.copy2(os.path.join(class_path, img), os.path.join(organized_dir, 'test', class_name, img))
+
+    print(f"Le dossier {organized_dir} a été remplacé.")
+
+# Vérification du nombre de fichiers dans chaque dossier (train, validation, test)
+for class_name in class_names:
+    train_class_path = os.path.join(organized_dir, 'train', class_name)
+    valid_class_path = os.path.join(organized_dir, 'valid', class_name)
+    test_class_path = os.path.join(organized_dir, 'test', class_name)
+
+    # Compte les fichiers dans chaque classe pour train
+    num_train_files = len(os.listdir(train_class_path)) if os.path.exists(train_class_path) else 0
+    print(f"Nombre d'images d'entraînement dans '{class_name}': {num_train_files}")
+
+    # Compte les fichiers dans chaque classe pour validation
+    num_valid_files = len(os.listdir(valid_class_path)) if os.path.exists(valid_class_path) else 0
+    print(f"Nombre d'images de validation dans '{class_name}': {num_valid_files}")
+    
+    # Compte les fichiers dans chaque classe pour test
+    num_test_files = len(os.listdir(test_class_path)) if os.path.exists(test_class_path) else 0
+    print(f"Nombre d'images de test dans '{class_name}': {num_test_files}")
+
+print("Dataset organisé en dossiers train, validation et test.")
+
+
+
+
+
+### Augmentation des images pour équilibrer nb d'indivs par classe et apporter variabilité dans les données d'entraînement et validation
+
+## Paramètres d'augmentation
+
+# nombre d'images augmentées générées à partir de l'image
+augmentation_factor = 3
+# Dictionnaire du nombre d'images par classe pour trouver le nb max d'images dans une classe
+class_image_counts_train = {}
+class_image_counts_valid = {}
+
+## Générateur d'images augmentées
+datagen_aug = ImageDataGenerator(
+    rescale=1./255,  # transformation des valeurs RGB en float
+    horizontal_flip=True,
+    vertical_flip=True,
+    zoom_range=0.15,
 )
 
-print(len(test_generator.filenames))
+# Demander si il faut remplacer le dossier augmented_clouds
+if os.path.exists(augmented_dir):
+    user_response = input(f"'{augmented_dir}' existe déjà. Voulez-vous le remplacer? (oui/non): ").strip().lower()
+    if user_response == "oui":
+        replace_augmented_folder = True
+    else:
+        replace_augmented_folder = False
+else:
+    replace_augmented_folder = True
+
+# Si dossier non-existant ou à remplacer:
+if replace_augmented_folder:
+    if os.path.exists(augmented_dir):
+        shutil.rmtree(augmented_dir)  # supprime le dossier augmented_clouds s'il existe
+        print(f"Suppression du dossier {augmented_dir}")
+    
+    # Création des dossiers train, valid et test pour augmentation
+    for class_name in class_names:
+        os.makedirs(os.path.join(augmented_dir, 'train', class_name), exist_ok=True)
+        os.makedirs(os.path.join(augmented_dir, 'valid', class_name), exist_ok=True)
+        os.makedirs(os.path.join(augmented_dir, 'test', class_name), exist_ok=True)
+        
+        ## DONNÉES TEST (non augmentées)
+        class_test_path = os.path.join(organized_dir, 'test', class_name)  # Chemin du dossier test dans organized_clouds
+        images_test = os.listdir(class_test_path)
+        
+        # Vérification de la présence d'images dans le dossier test
+        if len(images_test) == 0:
+            print(f"Pas d'image trouvée dans le dossier test de la classe {class_name}. Saut de cette classe.")
+            continue
+        
+        # Copier les images de test non augmentées
+        for img in images_test:
+            shutil.copy2(os.path.join(class_test_path, img), os.path.join(augmented_dir, 'test', class_name, img))
+        
+    ## DONNÉES TRAIN (avec augmentation)
+
+    # Comptage du nombre d'images dans chaque classe d'entraînement
+    for class_name in class_names:
+        class_train_path = os.path.join(organized_dir, 'train', class_name)
+        images_train = os.listdir(class_train_path)
+        class_image_counts_train[class_name] = len(images_train)
+
+    # Recherche du nombre moyen d'images dans une classe d'entraînement
+    mean_images_train = int(np.mean(list(class_image_counts_train.values())))
+    print(f"Nombre moyen d'images dans une classe d'entraînement : {mean_images_train}")
+
+    # Boucle pour générer le bon nombre d'images pour chaque classe d'entraînement
+    for class_name in class_names:
+        class_train_path = os.path.join(organized_dir, 'train', class_name)
+        images_train = os.listdir(class_train_path)
+        
+        # Sélectionner aléatoirement des images pour augmentation (pour équilibrer le nombre d'images)
+        selected_images_train = random.choices(images_train, k=int(mean_images_train/augmentation_factor))
+        
+        # Chemin de sauvegarde des images augmentées pour train
+        augmented_train_class_path = os.path.join(augmented_dir, 'train', class_name)
+        os.makedirs(augmented_train_class_path, exist_ok=True)
+        
+        # Augmenter et sauvegarder les images d'entraînement
+        for img_name in selected_images_train:
+            img_path = os.path.join(class_train_path, img_name)
+            img = load_img(img_path, target_size=(img_width, img_height))
+            x = img_to_array(img)
+            x = np.expand_dims(x, axis=0)
+            
+            # Boucle pour augmenter et sauvegarder les images augmentées
+            i = 0
+            for batch in datagen_aug.flow(x, batch_size=1, save_to_dir=augmented_train_class_path, save_prefix='aug', save_format='jpeg'):
+                i += 1
+                if i >= augmentation_factor:
+                    break
+
+    ## DONNÉES VALID (avec augmentation)
+
+    # Comptage du nombre d'images dans chaque classe de validation
+    for class_name in class_names:
+        class_valid_path = os.path.join(organized_dir, 'valid', class_name)
+        images_valid = os.listdir(class_valid_path)
+        class_image_counts_valid[class_name] = len(images_valid)
+
+    # Recherche du nombre moyen d'images dans une classe de validation
+    mean_images_valid = int(np.mean(list(class_image_counts_valid.values())))
+
+    print(f"Nombre moyen d'images dans une classe de validation : {mean_images_valid}")
+
+    # Boucle pour générer le bon nombre d'images pour chaque classe de validation
+    for class_name in class_names:
+        class_valid_path = os.path.join(organized_dir, 'valid', class_name)
+        images_valid = os.listdir(class_valid_path)
+        
+        # Sélectionner aléatoirement des images pour augmentation
+        selected_images_valid = random.choices(images_valid, k=int(mean_images_valid/augmentation_factor))
+        
+        # Chemin de sauvegarde des images augmentées pour validation
+        augmented_valid_class_path = os.path.join(augmented_dir, 'valid', class_name)
+        os.makedirs(augmented_valid_class_path, exist_ok=True)
+        
+        # Augmenter et sauvegarder les images de validation
+        for img_name in selected_images_valid:
+            img_path = os.path.join(class_valid_path, img_name)
+            img = load_img(img_path, target_size=(img_width, img_height))
+            x = img_to_array(img)
+            x = np.expand_dims(x, axis=0)
+            
+            # Boucle pour augmenter et sauvegarder les images augmentées
+            i = 0
+            for batch in datagen_aug.flow(x, batch_size=1, save_to_dir=augmented_valid_class_path, save_prefix='aug', save_format='jpeg'):
+                i += 1
+                if i >= augmentation_factor:
+                    break
+    
+    print(f"Le dossier {augmented_dir} a été créé/remplacé.")
+
+# Vérification du nombre de fichiers dans chaque dossier (train, valid, test)
+for class_name in class_names:
+    train_class_path = os.path.join(augmented_dir, 'train', class_name)
+    valid_class_path = os.path.join(augmented_dir, 'valid', class_name)
+    test_class_path = os.path.join(augmented_dir, 'test', class_name)
+
+    # Compte les fichiers dans chaque classe du dossier train
+    num_train_files = len(os.listdir(train_class_path)) if os.path.exists(train_class_path) else 0
+    print(f"Nombre d'images d'entraînement dans '{class_name}': {num_train_files}")
+
+    # Compte les fichiers dans chaque classe du dossier valid
+    num_valid_files = len(os.listdir(valid_class_path)) if os.path.exists(valid_class_path) else 0
+    print(f"Nombre d'images de validation dans '{class_name}': {num_valid_files}")
+
+    # Compte les fichiers dans chaque classe du dossier test
+    num_test_files = len(os.listdir(test_class_path)) if os.path.exists(test_class_path) else 0
+    print(f"Nombre d'images de test dans '{class_name}': {num_test_files}")
 
 
 
 
-num_classes=4
-img_width = 256
-img_height = 256
-
-#model = Sequential()  # Création d'un réseau de neurones vide 
-
-# Ajout de la première couche, suivie d'une couche ReLU
-model_in=Input(shape=[img_width, img_height, 3])
-#le model va prendre des matrices de taille 256*256 et on va le transformer en vecteurs de taille 128
-model=Conv2D(16,(5,5))(model_in)
-model=Activation('relu')(model)
-model=MaxPooling2D()(model)
-
-model=Conv2D(16,(3,3))(model_in)
-model=Activation('relu')(model)
-model=MaxPooling2D()(model)
-
-#model.add(Dropout(0.2)) #regularisation pr eviter le surapprentissage
-
-# Ajout de la deuxieme couche, suivie d'une couche ReLU
-#model.add(Dense(64, activation='relu'))
-model=Conv2D(32,(3,3))(model)
-model=Activation('relu')(model)
-model=MaxPooling2D()(model)
-#model.add(Dropout(0.2))
-
-model=Flatten()(model)
-
-#model=Dense(16,activation='relu')(model)
-#model=Dropout(0.2)(model)
-
-#derniere couche: softmax
-#model2=Dense(1, activation=tf.nn.softmax)(model2)
-model=Dense(num_classes, activation='softmax')(model)
-model_final = Model(model_in,model)
 
 
 
+
+
+
+
+
+
+
+###Creation de generateur d'images qui ne sert qu'à interpréter les images test (non augmentées) et train validation (déja augmentées)
+generator = ImageDataGenerator(
+    rescale=1./255
+    )
+
+
+# Appel du generateur pour creer les objets contenant les images traitées pour entrainer, valider et tester le modele 
+# Creation data train
+train_generator = generator.flow_from_directory(
+    data_dir + "augmented_clouds/train",
+    target_size = (img_width,img_height),
+    color_mode = 'rgb',
+    batch_size = batch_size_mod, 
+    class_mode = "sparse", # fonction de perte => cross entropy
+    shuffle = True, #  empeche le modèle d'apprendre sur ordre des échantillons
+    )
+
+# Creation data validation
+valid_generator = generator.flow_from_directory(
+    data_dir + "augmented_clouds/valid",
+    target_size = (img_width,img_height),
+    batch_size = batch_size_mod,
+    class_mode = "sparse",
+    shuffle = False
+)
+
+# Creation data test
+test_generator = generator.flow_from_directory(
+    data_dir + "augmented_clouds/test",
+    target_size = (256, 256),
+    batch_size = 1,
+    class_mode = "sparse",
+    shuffle = False
+)
+
+# nombre d'images pour chaque dataset 
+print("train : ", len(train_generator.filenames))
+print("valid : ", len(valid_generator.filenames))
+print("test  : ", len(test_generator.filenames))
+
+# nb de classes détéctés
+print("nb classes : ", train_generator.class_indices)
+
+
+
+
+
+
+
+
+
+
+
+
+
+###### Afficher image ---------------------------------------------------------
+images, labels = next(train_generator)
+
+image = images[0]
+label = labels[0]
+
+class_index = np.argmax(label)
+
+plt.imshow(image)  
+plt.axis('off')
+plt.title(round(label))
+plt.show()
+# clear : 0, 
+# cloudy : 1
+# haze : 2
+# partly_cloudy : 3
+###### ------------------------------------------------------------------------
+
+# =============================================================================
+# CREATION ARCHITECTURE MODEL
+# =============================================================================
+
+# Création d'un réseau de neurones vide 
+model = keras.models.Sequential()
+
+# Input 
+model_input = Input(shape=(img_width, img_height,3)) # 3 car RVB
+
+# 1ère couche - PARTIE 1 : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(16, (5,5), padding = "same")(model_input)
+model = Activation("relu")(model)
+model = MaxPooling2D(pool_size=(2,2))(model) # 2,2 taille par défault
+#regularisation pr eviter le surapprentissage, permet d'éteindre des neurones à chaque époch. Valeur = % de neurones à éteindre => à mettre entre couche dense et parfois entre couches convolutionelles
+model = Dropout(0.2)(model) 
+
+# 1ère couche - PARTIE 2: convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(16, (3,3), padding = "same")(model)
+model = Activation("relu")(model)
+model = MaxPooling2D(pool_size = (2,2))(model)
+model = Dropout(0.2)(model) 
+
+# 2ème couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(32, (3,3), padding = "same")(model)
+model = Activation("relu")(model)
+model = MaxPooling2D(pool_size = (2,2))(model)
+model = Dropout(0.2)(model) 
+
+# 3ème couche : applatissement + couche Dense + activation ReLU + Dropout
+model = Flatten()(model)
+model = Dense(16)(model)
+model = Activation("relu")(model)
+model = Dropout(0.2)(model) 
+
+# Output
+model = Dense(nb_class)(model)
+model_output = Activation("softmax")(model)
+
+# summary
+model_final = Model(model_input, model_output)
 model_final.summary()
-#model.add(Dense(num_classes, activation='sigmoid'))
 
+# =============================================================================
+# COMPILATION MODEL
+# =============================================================================
 
-epochs=3
-step_size_train=train_generator.n//train_generator.batch_size
-nb_validation_samples = valid_generator.n//valid_generator.batch_size//5
+model_final.compile(optimizer= SGD(learning_rate=0.001, momentum=0.9), # jouer sur les paramètres
+                    loss = "sparse_categorical_crossentropy", # RMSprop ??
+                    metrics = ["accuracy"]) # ajouter autre métriques ?
+# momentum = 90 % => Indique que 90 % de la mise à jour précédente sera pris en compte lors de la mise à jour actuelle des poids
+
+# =============================================================================
+# ENTRAINEMENT MODEL
+# =============================================================================
+
+step_size_train = train_generator.n//train_generator.batch_size # nombre d'étapes nécessaires pour parcourir l'ensemble des données d'entraînement en une époch
+lenght_valid = 5 # plus c'est haut et moins on a de data de validation
+nb_validation_samples = valid_generator.n//valid_generator.batch_size//lenght_valid # nb d'échantillons de validation utilisé pour validation en divisant encore si on veut une vitesse plus rapide
 print(step_size_train)
 print(nb_validation_samples)
 
-#Compilation 
-model_final.compile(loss='categorical_crossentropy',
-              optimizer="RMSprop", # to be checked 
-              metrics=['accuracy'])
-
-model_final.fit_generator(
+# option de réduction d'apprentissage lorsqu'il n'y a plus de progrès
+lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=10)
+############################################### DEMANDER L'ARGUMENT class_weight QUAND ON APPELLE LA FONCTION FIT POUR EQUILIBRER LES POIDS DES CLASSES SELON LEUR PRESENCE DANS LE JEU DE DONNEES (PAGE 326 DU LIVRE Hands-On Machine Learning with Scikit-Learn and TensorFlow) #####################################################
+history = model_final.fit(
               train_generator,
-              #samples_per_epoch = nb_train_samples,
-              steps_per_epoch=step_size_train,
-              epochs = epochs,
-              #validation_data = valid_generator,
-              #nb_val_samples = 10
-              #callbacks = [checkpoint]
+              steps_per_epoch=step_size_train, # nb étapes à effectuer dans chaque époque. Cela signifie que le modèle va traiter "step_size_train" lots d'échantillons par époch.
+              epochs = epoch_mod,
+              validation_data = valid_generator,
+              validation_steps=nb_validation_samples,
+              #callbacks=[tensorboard_cb] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter notre lr_scheduler
               )
 
-#score = model_final.evaluate(pre_data_train, pre_data_train_name)
-#print('Test loss:', score[0])
-#print('Test accuracy:', score[1])
+# Sauvegarder le modèle entraîné
+model_final.save(save_mod_dir + "cloud_classifier_model.h5")
+# model = keras.models.load_model("my_keras_model.h5") # pour load un model
 
+# =============================================================================
+# VALIDATION MODEL
+# =============================================================================
 
-#Affichage des prédictions
+# /!\ Implementer cross validation !!!
 
-filenames = test_generator.filenames
-nb_samples = len(filenames)
-print(nb_samples)
+# VALIDATION sur des données de validation
+valid_loss, valid_accuracy = model_final.evaluate(valid_generator)
+print(f"Validation loss : {valid_loss}")
+print(f"Validation accuracy: {valid_accuracy}")
 
-predict = model_final.predict_generator(test_generator,steps = nb_samples)
-print(predict)
+# VALIDATION sur des données de test
+test_loss, test_accuracy = model_final.evaluate(test_generator)
+print(f"test loss : {test_loss}")
+print(f"test accuracy: {test_accuracy}")
 
-from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img
-
-# last_img = 17855
-last_img  = 10
-f = open('myfile.csv', 'w') 
-f.write("name;prediction\n")
-for i in range(last_img): 
-  filename = str(i)+".jpg"
-  img = load_img("/content/gdrive/My Drive/clouds/"+filename)  # this is a PIL image
-  x = img_to_array(img) 
-  x = x/255
-  x = x.reshape((1,) + x.shape) 
-  predict = model_final.predict(x)
-  #print(filename+";"+str(int(predict>.5)))
-  f.write(filename+";"+str(int(predict>.5))+"\n")
-f.close()
-files.download('myfile.csv')
-
-accuracy = history.history['acc']
-loss = history.history['loss']
-val_accuracy = history.history['val_acc']
-val_loss = history.history['val_loss']
-
-print(f'Training Accuracy: {np.max(accuracy)}')
-print(f'Training Loss: {np.min(loss)}')
-print(f'Validation Accuracy: {np.max(val_accuracy)}')
-print(f'Validation Loss: {np.min(val_loss)}')
-
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('Model accuracy')
-plt.ylabel('Accuracy')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Test'], loc='upper left')
+# Tracer la courbe d'entraînement et de validation => historique du modèle
+plt.plot(history.history['accuracy'], label='train accuracy')
+plt.plot(history.history['valid_accuracy'], label='valid accuracy')
+plt.title('Training and validation accuracy')
+plt.legend()
 plt.show()
 
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('Model loss')
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
-plt.legend(['Train', 'Test'], loc='upper left')
+plt.plot(history.history['loss'], label='train loss')
+plt.plot(history.history['valid_loss'], label='val loss')
+plt.title('Training and validation loss')
+plt.legend()
 plt.show()
+
+# =============================================================================
+# EVALUATION ET PREDICTIONS
+# =============================================================================
+
+# faisons un binary classifier pour chaque classe
+# clear : 0, 
+# cloudy : 1
+# haze : 2
+# partly_cloudy : 3
+
+# nb_images = 40479
+taille_lot_img = 1000
+
+# recreaton generator juste pour moduler taille lots
+train_generator = generator.flow_from_directory(
+    data_dir + "clouds",
+    target_size = (256, 256),
+    batch_size = 1000//2,
+    class_mode = "sparse",
+    shuffle = True
+    )
+
+# Creation data test
+test_generator = generator.flow_from_directory(
+    data_dir + "clouds",
+    target_size = (256, 256),
+    batch_size = 1000//2,
+    class_mode = "sparse",
+    shuffle = False
+)
+
+images_train, labels_train = next(train_generator) # 500 éléments = taille du batch
+images_test, labels_test = next(test_generator) # 500 éléments = taille du batch
+
+# Aplatir les images pour le classificateur
+n_samples, height, width, n_channels = images_train.shape
+images_train_flat = images_train.reshape(n_samples, height * width * n_channels)
+
+# Appliquer la même transformation sur le test
+n_samples_test = images_test.shape[0]
+images_test_flat = images_test.reshape(n_samples_test, height * width * n_channels)
+
+Y_train = labels_train
+Y_test = labels_test
+
+y_train_0 = (labels_train == 0) 
+y_test_0 = (labels_test == 0)
+
+y_train_1 = (labels_train == 1) 
+y_test_1 = (labels_test == 1)
+
+y_train_2 = (labels_train == 2) 
+y_test_2 = (labels_test == 2)
+
+y_train_3 = (labels_train == 3) 
+y_test_3 = (labels_test == 3)
+
+y_train = [y_train_0,y_train_1,y_train_2,y_train_3]
+
+# binary classifier pour chaque classe
+sgd_clf = SGDClassifier(random_state=42) # seed
+
+# exemple binary classifier pour classer les clears
+some_img = images_train_flat[0] # img
+sgd_clf.fit(images_train_flat, y_train_0) # apprentissage
+sgd_clf.predict([some_img]) # prediction sur une image
+
+nb_k_folds = 3
+# test validation croisée
+cross_val_score(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds, scoring="accuracy")
+
+
+###### EVALUATION sur données test
+### 1. Matrice de confusion  ----------------------------------------------------------------------------------------------------------------
+
+# TOT
+y_train_pred_tot = cross_val_predict(sgd_clf, images_train_flat, Y_train, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(Y_train, y_train_pred_tot)
+
+# clear : 0
+y_train_pred_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_0, y_train_pred_0)
+
+# cloudy : 1
+y_train_pred_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_1, y_train_pred_1)
+
+# haze : 2
+y_train_pred_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_2, y_train_pred_2)
+
+# partly_cloudy : 3
+y_train_pred_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=nb_k_folds) # Just like the cross_val_score() function, cross_val_predict() performs K-fold cross-validation, but instead of returning the evaluation scores, it returns the predictions made on each test fold
+confusion_matrix(y_train_3, y_train_pred_3)
+
+
+### 2. courbe precision/rappel pour validation si données déséquilibrés (c'set le cas ici) --------------------------------------------------
+## score ----------------------------------------------------------------------
+
+# TOT
+precision_score(Y_train, y_train_pred_tot)
+recall_score(Y_train, y_train_pred_tot)
+
+# clear : 0
+precision_score(y_train_0, y_train_pred_0)
+recall_score(y_train_0, y_train_pred_0)
+
+# cloudy : 1
+precision_score(y_train_1, y_train_pred_1)
+recall_score(y_train_1, y_train_pred_1)
+
+# haze : 2
+precision_score(y_train_2, y_train_pred_2)
+recall_score(y_train_2, y_train_pred_2)
+
+# partly_cloudy : 3
+precision_score(y_train_3, y_train_pred_3)
+recall_score(y_train_3, y_train_pred_3)
+
+## fig avec seuil : à faire + comprendre --------------------------------------
+y_scores_0 = cross_val_predict(sgd_clf, images_train_flat, y_train_0, cv=3,method="decision_function")
+y_scores_1 = cross_val_predict(sgd_clf, images_train_flat, y_train_1, cv=3,method="decision_function")
+y_scores_2 = cross_val_predict(sgd_clf, images_train_flat, y_train_2, cv=3,method="decision_function")
+y_scores_3 = cross_val_predict(sgd_clf, images_train_flat, y_train_3, cv=3,method="decision_function")
+
+y_scores = [y_scores_0,y_scores_1,y_scores_2,y_scores_3]
+
+## curve : à faire ------------------------------------------------------------
+# [...]
+
+### 3. ROC curve et AUC -----------------------------------------------------------------------------------------------------------------------------
+def plot_roc_curve(fpr, tpr, label=None):
+ plt.plot(fpr, tpr, linewidth=2, label=label)
+ plt.plot([0, 1], [0, 1], 'k--') # dashed diagonal
+
+for i in range(nb_class):
+    fpr, tpr, thresholds = roc_curve(y_train[i], y_scores[i])
+    plot_roc_curve(fpr, tpr)
+    plt.title(f"ROC curve class {i}")
+    plt.show()
+
+
+# (4. f1 score = mesure de précision aditionnel) ----------------------------------------------------------------------------------------------------
+# clear : 0
+f1_score(y_train_0, y_train_pred_0)
+
+# cloudy : 1
+f1_score(y_train_1, y_train_pred_1)
+
+# haze : 2
+f1_score(y_train_2, y_train_pred_2)
+
+# partly_cloudy : 3
+f1_score(y_train_3, y_train_pred_3)
+
+
+
+
+
