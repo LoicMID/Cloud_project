@@ -511,7 +511,7 @@ print("Poids :", class_weights_mod)
 # entrainemtn du model ### voir si besoin de transformer image en tf.float32
 history = model_final.fit(
               train_generator,
-              # class_weight = class_weights_mod, ## <===================== ne marche pas si activé 
+              # class_weight = class_weights_mod, ## <===================== ne marche pas si activé => utiliser sklearn.utils.compute_class_weight()
               epochs = epoch_mod,
               validation_data = valid_generator,
               callbacks=[tensorboard_cb,lr_scheduler] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter lr_scheduler. # checkpoints ??
