@@ -508,6 +508,7 @@ total_images = sum(class_counts.values())
 class_weights_mod = {i: round(float(total_images) / (len(class_counts) * count), 2) for i, count in enumerate(class_counts.values())}
 print("Poids :", class_weights_mod)
 
+# test avec load_weight avant + tester avec liste à la place dico
 # entrainemtn du model ### voir si besoin de transformer image en tf.float32
 history = model_final.fit(
               train_generator,
