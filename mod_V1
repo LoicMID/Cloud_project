@@ -227,13 +227,7 @@ def augment_image(image):
         new_w = int(w * scale)
         new_h = int(h * scale)
         zoomed_image = cv2.resize(image, (new_w, new_h))
-        
-        # Centrer le zoom dans l'image originale
-        # if scale < 1.0:
-        #     pad_w = (w - new_w) // 2
-        #     pad_h = (h - new_h) // 2
-        #     zoomed_image = cv2.copyMakeBorder(zoomed_image, pad_h, h - new_h - pad_h, pad_w, w - new_w - pad_w, cv2.BORDER_REPLICATE)
-        
+
         return zoomed_image
 
     def flip_image(image):
@@ -311,7 +305,7 @@ if replace_augmented_folder:
         
         # Compléter avec images augmentées
         nb_img_manquantes = max_images_train - nb_img_originales
-        print(nb_img_manquantes)
+        print("images manquantes", nb_img_manquantes)
         # Sélectionner aléatoirement des images pour augmentation (pour équilibrer le nombre d'images)
         selected_images_train = random.choices(images_train, k=nb_img_manquantes)
         print(f"nombre d'images dans selected_images_train pour la classe {class_name}: ", len(selected_images_train))
@@ -319,20 +313,26 @@ if replace_augmented_folder:
         augmented_train_class_path = os.path.join(augmented_dir, 'train', class_name)
         os.makedirs(augmented_train_class_path, exist_ok=True)
         
+        counter = 0
         # Augmenter et sauvegarder les images d'entraînement
         for img in selected_images_train:
             
-            print(class_name, selected_images_train.index(img))
+            img_path = os.path.join(class_train_path, img)
+            
+            # Obtenir le nom de l'image sans l'extension
+            img_name, ext = os.path.splitext(img)  # Séparer le nom de fichier et l'extension
             
             img = cv2.imread(img_path)
     
             # Appliquer les augmentations OpenCV
             augmented_img = augment_image(img)
-   
-            # Sauvegarder les images augmentées
-            save_path = os.path.join(augmented_train_class_path, f'aug_{img_name}')
+            
+            # Créer le chemin de sauvegarde
+            save_path = os.path.join(augmented_train_class_path, f'aug_{img_name}_{counter}.jpg')
             cv2.imwrite(save_path, augmented_img)
-    
+            
+            counter += 1
+            
     ## DONNÉES VALID (avec augmentation)
 
     # Comptage du nombre d'images dans chaque classe de validation
@@ -357,7 +357,8 @@ if replace_augmented_folder:
         
         # Compléter avec images augmentées
         nb_img_manquantes = max_images_valid - len(images_valid)
-        
+        print("images manquantes", nb_img_manquantes)
+
         # Sélectionner aléatoirement des images pour augmentation
         selected_images_valid = random.choices(images_valid, k=nb_img_manquantes)
         
@@ -365,20 +366,26 @@ if replace_augmented_folder:
         augmented_valid_class_path = os.path.join(augmented_dir, 'valid', class_name)
         os.makedirs(augmented_valid_class_path, exist_ok=True)
         
+        counter = 0
         # Augmenter et sauvegarder les images de validation
         for img in selected_images_valid:
-            
-            print(class_name, selected_images_train.index(img))
+                        
+            img_path = os.path.join(class_valid_path, img)
+
+            # Obtenir le nom de l'image sans l'extension
+            img_name, ext = os.path.splitext(img)  # Séparer le nom de fichier et l'extension
             
             img = cv2.imread(img_path)
             
             # Appliquer les augmentations OpenCV
             augmented_img = augment_image(img)
             
-            # Sauvegarder les images augmentées
-            save_path = os.path.join(augmented_valid_class_path, f'aug_{img_name}')
+            # Créer le chemin de sauvegarde
+            save_path = os.path.join(augmented_valid_class_path, f'aug_{img_name}_{counter}.jpg')
             cv2.imwrite(save_path, augmented_img)
-
+            
+            counter += 1
+            
     print(f"Le dossier {augmented_dir} a été créé/remplacé.")
 
 # Vérification du nombre de fichiers dans chaque dossier (train, valid, test)
