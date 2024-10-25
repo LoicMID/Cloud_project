@@ -16,11 +16,13 @@ from tensorflow import keras
 from tensorflow.keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img # pour preprocessing img et plot img validation
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation, Dropout
 from tensorflow.keras.models import Model # pour compilation model
-from tensorflow.keras.optimizers import SGD, RMSprop
+from tensorflow.keras.optimizers import SGD, RMSprop, Adam
 
 from sklearn.model_selection import cross_val_predict, cross_val_score, train_test_split # pour validation model
-from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve, auc, f1_score, precision_score, recall_score # pour evaluation prédiction model
+from sklearn.metrics import confusion_matrix, precision_recall_curve, average_precision_score, roc_curve, auc, f1_score, precision_score, recall_score # pour evaluation prédiction model
 from sklearn.linear_model import SGDClassifier
+
+# from kerastuner import HyperParameters 
 
 import numpy as np
 import pandas as pd
@@ -54,22 +56,22 @@ nb_class = 4 # clear / partly couldy / couldy / haze
 class_names = ["clear","partly_cloudy","cloudy","haze"]
 
 ###### Hyperparamètres à ajuster : 
-batch_size_mod = 300 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète 
 # Petites tailles de batch (16 - 64) : utilisées lorsque la généralisation est prioritaire, ou si les ressources mémoire sont limitées.
 # Tailles de batch moyennes (128 - 256) : un bon compromis entre stabilité et efficacité, souvent utilisé en pratique.
 # Grandes tailles de batch (512 et plus) : adaptées si le modèle est entraîné sur des données massives ou sur du matériel très performant, avec un apprentissage souvent plus stable.
-
-epoch_mod = 10 # nb de fois où les input sont pris en compte
-
-dropout_mod = 0.2
-
+batch_size_mod = 256 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète 
+epoch_mod = 11 # nb de fois où les input sont pris en compte
+dropout_mod = 0.1
 learning_rate_mod = 0.001
-
-taille_lot_augm_train = 5000
-
+taille_lot_augm_train = 6000
 taille_lot_augm_valid = 1000
 
 # paramètres architecture model à ajouter
+nb_filtre_1, taille_filtre_1 = 16, (3,3) # pour couche convolution 1
+nb_filtre_2, taille_filtre_2 = 32, (3,3) # pour couche convolution 2
+nb_filtre_3, taille_filtre_3 = 64, (3,3) # pour couche convolution 3
+taille_pool_size = (2,2) # ici chaque passage réduit la hauteur et la largeur de moitié
+nb_neurones_dense = 32 # pour couche dense 4
 
 ### Creation seed pour reproductibilité de l'aleatoire : a activer si besoin
 # random_seed = 42 #choix arbitraire de 42 
@@ -85,12 +87,13 @@ taille_lot_augm_valid = 1000
 class_folders = os.listdir(data_dir + "clouds")
 
 # Compter les fichiers dans chaque sous-dossier (classe)
+print("\n")
 for class_folder in class_folders:
     class_path = os.path.join(data_dir + "clouds", class_folder)
     if os.path.isdir(class_path):
         file_count = len([f for f in os.listdir(class_path) if os.path.isfile(os.path.join(class_path, f))])
-        print(f"Classe {class_folder}: {file_count} images")
-
+        print(f"TOTAL : Classe {class_folder}: {file_count} images")
+print("\n")
 # classe fortement déséquilibré pour clear et un peu pour partly_cloudy
 # Classe clear: 28432 images
 # Classe cloudy: 2089 images
@@ -99,7 +102,7 @@ for class_folder in class_folders:
 
 ###Separation des donnees Test vs Train vs Validation
 if os.path.exists(organized_dir):
-    user_response = input(f" Voulez-vous créer/remplacer '{organized_dir}'? (oui/non): ").strip().lower()
+    user_response = input(f"Voulez-vous créer/remplacer '{organized_dir}'? (oui/non): ").strip().lower()
     if user_response == "oui":
         replace_organized_folder = True
     else:
@@ -154,29 +157,27 @@ if replace_organized_folder:
     print(f"Le dossier {organized_dir} a été remplacé.")
 
 
-# Vérification du nombre de fichiers dans chaque dossier (train, validation, test)
-for class_name in class_names:
-    train_class_path = os.path.join(organized_dir, 'train', class_name)
-    num_train_files = len(os.listdir(train_class_path)) if os.path.exists(train_class_path) else 0
-    print(f"TRAIN'{class_name}': {num_train_files}")
-print("\n")
-for class_name in class_names:
-    valid_class_path = os.path.join(organized_dir, 'valid', class_name)
-    num_valid_files = len(os.listdir(valid_class_path)) if os.path.exists(valid_class_path) else 0
-    print(f"VALID '{class_name}': {num_valid_files}")
-print("\n")    
-for class_name in class_names:
-    test_class_path = os.path.join(organized_dir, 'test', class_name)
-    num_test_files = len(os.listdir(test_class_path)) if os.path.exists(test_class_path) else 0
-    print(f"TEST'{class_name}': {num_test_files}")
-
-
+# # Vérification du nombre de fichiers dans chaque dossier (train, validation, test)
+# for class_name in class_names:
+#     train_class_path = os.path.join(organized_dir, 'train', class_name)
+#     num_train_files = len(os.listdir(train_class_path)) if os.path.exists(train_class_path) else 0
+#     print(f"TRAIN'{class_name}': {num_train_files}")
+# print("\n")
+# for class_name in class_names:
+#     valid_class_path = os.path.join(organized_dir, 'valid', class_name)
+#     num_valid_files = len(os.listdir(valid_class_path)) if os.path.exists(valid_class_path) else 0
+#     print(f"VALID '{class_name}': {num_valid_files}")
+# print("\n")    
+# for class_name in class_names:
+#     test_class_path = os.path.join(organized_dir, 'test', class_name)
+#     num_test_files = len(os.listdir(test_class_path)) if os.path.exists(test_class_path) else 0
+#     print(f"TEST'{class_name}': {num_test_files}")
 
 
 
 
 if os.path.exists(augmented_dir):
-    user_response = input(f"'{augmented_dir}' existe déjà. Voulez-vous le remplacer? (oui/non): ").strip().lower()
+    user_response = input(f"Voulez-vous créer/remplacer '{augmented_dir}'? (oui/non): ").strip().lower()
     replace_augmented_folder = user_response == "oui"
 else:
     replace_augmented_folder = True
@@ -262,7 +263,8 @@ if replace_augmented_folder:
         organized_valid_class_path = os.path.join(organized_dir, 'valid', class_name)
         shutil.copytree(organized_valid_class_path, valid_class_path, dirs_exist_ok=True)
         augmenter_images(valid_class_path, taille_lot_augm_valid)
-
+        
+print("\n")
 # Vérification du nombre d'images dans chaque ensemble
 for class_name in class_names:
     train_class_path = os.path.join(augmented_dir, 'train', class_name)
@@ -278,7 +280,7 @@ for class_name in class_names:
     test_class_path = os.path.join(augmented_dir, 'test', class_name)
     num_test_files = len(os.listdir(test_class_path)) if os.path.exists(test_class_path) else 0
     print(f"TEST '{class_name}': {num_test_files}")
-
+print("\n")
 
 
 ###Creation de generateur d'images qui ne sert qu'à interpréter les images test (non augmentées) et train validation (déja augmentées)
@@ -315,17 +317,17 @@ test_generator = generator.flow_from_directory(
 )
 
 # nombre d'images pour chaque dataset 
-print("train : ", len(train_generator.filenames))
-print("valid : ", len(valid_generator.filenames))
-print("test  : ", len(test_generator.filenames))
+# print("train : ", len(train_generator.filenames))
+# print("valid : ", len(valid_generator.filenames))
+# print("test  : ", len(test_generator.filenames))
 
-# nb de classes détéctés
-print("nb classes : ", train_generator.class_indices)
-print("nb classes : ", valid_generator.class_indices)
-print("nb classes : ", test_generator.class_indices)
+# # nb de classes détéctés
+# print("nb classes : ", train_generator.class_indices)
+# print("nb classes : ", valid_generator.class_indices)
+# print("nb classes : ", test_generator.class_indices)
 
 ###### Afficher image ---------------------------------------------------------
-nb_test = 10
+nb_test = 1
 type_generator = train_generator
 # type_generator = valid_generator
 # type_generator = test_generator
@@ -348,23 +350,22 @@ for i in range(nb_test):
 # partly_cloudy : 3
 ###### ------------------------------------------------------------------------
 
-# modif teste en tensorshape
-images, labels = next(train_generator)
-# train_generator = map(lambda x: (tf.convert_to_tensor(x[0], dtype=tf.float32), tf.convert_to_tensor(x[1], dtype=tf.float32)), train_generator)
-print(len(images))
-print(labels)
-print(images.shape)
-print(labels.shape)
+# images, labels = next(train_generator)
+# # train_generator = map(lambda x: (tf.convert_to_tensor(x[0], dtype=tf.float32), tf.convert_to_tensor(x[1], dtype=tf.float32)), train_generator)
+# print(len(images))
+# print(labels)
+# print(images.shape)
+# print(labels.shape)
 
-images, labels = next(valid_generator)
-# valid_generator = map(lambda x: (tf.convert_to_tensor(x[0], dtype=tf.float32), tf.convert_to_tensor(x[1], dtype=tf.float32)), valid_generator)
-print(images.shape)
-print(labels.shape)
+# images, labels = next(valid_generator)
+# # valid_generator = map(lambda x: (tf.convert_to_tensor(x[0], dtype=tf.float32), tf.convert_to_tensor(x[1], dtype=tf.float32)), valid_generator)
+# print(images.shape)
+# print(labels.shape)
 
-images, labels = next(test_generator)
-# test_generator = map(lambda x: (tf.convert_to_tensor(x[0], dtype=tf.float32), tf.convert_to_tensor(x[1], dtype=tf.float32)), test_generator)
-print(images.shape)
-print(labels.shape)
+# images, labels = next(test_generator)
+# # test_generator = map(lambda x: (tf.convert_to_tensor(x[0], dtype=tf.float32), tf.convert_to_tensor(x[1], dtype=tf.float32)), test_generator)
+# print(images.shape)
+# print(labels.shape)
 
 #### /!\ Dataset assez grand pour ne pas avoir à faire de la validation croisée !
 
@@ -378,28 +379,28 @@ model = keras.models.Sequential()
 # Input 
 model_input = Input(shape=(img_width, img_height,3)) # 3 car RVB
 
-# 1ère couche - PARTIE 1 : convolution + activation ReLU + max-pooling + Dropout
-model = Conv2D(16, (5,5), padding = "same")(model_input)
+# 1ère couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(nb_filtre_1, taille_filtre_1, padding = "same")(model_input)
 model = Activation("relu")(model)
-model = MaxPooling2D(pool_size=(2,2))(model) # 2,2 taille par défault
+model = MaxPooling2D(pool_size = taille_pool_size)(model) # 2,2 taille par défault = chaque passage réduit la hauteur et la largeur de moitié.
 #regularisation pr eviter le surapprentissage, permet d'éteindre des neurones à chaque époch. Valeur = % de neurones à éteindre => à mettre entre couche dense et parfois entre couches convolutionelles
 model = Dropout(dropout_mod)(model) 
 
-# 1ère couche - PARTIE 2: convolution + activation ReLU + max-pooling + Dropout
-model = Conv2D(16, (3,3), padding = "same")(model)
+#2ème couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(nb_filtre_2, taille_filtre_2, padding = "same")(model)
 model = Activation("relu")(model)
-model = MaxPooling2D(pool_size = (2,2))(model)
+model = MaxPooling2D(pool_size = taille_pool_size)(model)
 model = Dropout(dropout_mod)(model) 
 
-# 2ème couche : convolution + activation ReLU + max-pooling + Dropout
-model = Conv2D(32, (3,3), padding = "same")(model)
+# 3ème couche : convolution + activation ReLU + max-pooling + Dropout
+model = Conv2D(nb_filtre_3, taille_filtre_3, padding = "same")(model)
 model = Activation("relu")(model)
-model = MaxPooling2D(pool_size = (2,2))(model)
+model = MaxPooling2D(pool_size = taille_pool_size)(model)
 model = Dropout(dropout_mod)(model) 
 
-# 3ème couche : applatissement + couche Dense + activation ReLU + Dropout
+# 4ème couche : applatissement + couche Dense + activation ReLU + Dropout
 model = Flatten()(model)
-model = Dense(16)(model)
+model = Dense(nb_neurones_dense)(model)
 model = Activation("relu")(model)
 model = Dropout(dropout_mod)(model) 
 
@@ -422,10 +423,10 @@ model_final.summary()
 
 # momentum = 90 % => Indique que 90 % de la mise à jour précédente sera pris en compte lors de la mise à jour actuelle des poids
 
-# COMPILATION AVEC RSMPROP (permet d'ajuste le taux d'apprentissage en continu)
+# COMPILATION AVEC RSMPROP OU ADAM
 
-model_final.compile(optimizer=RMSprop(learning_rate=learning_rate_mod, rho=0.9),  # rho de RMSprop joue le même rôle que le momentum : 
-                    loss="sparse_categorical_crossentropy",
+model_final.compile(optimizer = Adam(learning_rate = learning_rate_mod), 
+                    loss = "sparse_categorical_crossentropy",
                     metrics = [
                     'accuracy',
                     # tfa.metrics.F1Score(num_classes=num_classes, average='macro'),  # ou 'micro' selon votre besoin
@@ -458,18 +459,7 @@ tensorboard_cb = keras.callbacks.TensorBoard(run_logdir)
 %tensorboard --logdir ./my_logs --port=6006
 
 # option de réduction d'apprentissage lorsqu'il n'y a plus de progrès
-lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=4)
-
-# changer les poids pour réequilibrer
-# Nombre d'images par classe
-for class_name in class_names:
-    train_class_path = os.path.join(augmented_dir, 'train', class_name) # augmented_dir
-    valid_class_path = os.path.join(augmented_dir, 'valid', class_name) # augmented_dir
-    test_class_path = os.path.join(augmented_dir, 'test', class_name) # augmented_dir
-
-    # Compte les fichiers dans chaque classe pour train
-    num_train_files = len(os.listdir(train_class_path)) if os.path.exists(train_class_path) else 0
-    print(f"TRAIN'{class_name}': {num_train_files}")
+lr_scheduler = keras.callbacks.ReduceLROnPlateau(factor=0.1, patience=3)
 
 # ajustement des poids => non fonctionel avec générateur à la place de x et y en entrée dans la fonction fiy=t
 # class_counts = {
@@ -482,13 +472,16 @@ for class_name in class_names:
 # class_weights_mod = {i: round(float(total_images) / (len(class_counts) * count), 2) for i, count in enumerate(class_counts.values())}
 # print("Poids :", class_weights_mod)
 
+print(f"\nEntrainement du model sur {taille_lot_augm_train} images par classes sur {epoch_mod} epochs composé de batch de {batch_size_mod} images \ntaux d'apprentissage initial = {learning_rate_mod}\nDropout = {dropout_mod}\n")
+
+
 # entrainemtn du model 
 history = model_final.fit(
               train_generator,
               # class_weight = class_weights_mod, # <===================== ne marche pas si activé 
               epochs = epoch_mod,
               validation_data = valid_generator,
-              callbacks=[tensorboard_cb] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter lr_scheduler. # checkpoints ??
+              callbacks=[tensorboard_cb,lr_scheduler] # tensorboard_cb pour appel tensorboard. On peut aussi ajouter lr_scheduler. # checkpoints ??
               )
 
 #### --------------------------------------------------------------------------
@@ -501,7 +494,7 @@ history = model_final.fit(
 date_str = datetime.now().strftime("%d_%m_%Hh%M")  # JJ_MM
 model_final.save(save_mod_dir + f"cloud_classifier_model_{date_str}_avec_{epoch_mod}_epochs.h5")
 
-model_final = keras.models.load_model(save_mod_dir + "cloud_classifier_model_25_10_avec_10_epochs.h5") # pour load un model
+# model_final = keras.models.load_model(save_mod_dir + "cloud_classifier_model_25_10_avec_10_epochs.h5") # pour load un model
 
 sys.exit()
 
@@ -632,8 +625,8 @@ else:
 
 
 ###### PREDICTIONS : 
-y_test_pred = model_final.predict(test_generator)
-y_test_pred_classes = np.argmax(y_test_pred, axis=1)
+y_test_pred_prob = model_final.predict(test_generator)
+y_test_pred_classes = np.argmax(y_test_pred_prob, axis=1)
 
 ###### EVALUATION sur données test
 ### 1. Accuracy
@@ -689,7 +682,16 @@ for i in range(nb_class):
     plt.ylabel('Véritables Étiquettes')
     plt.show()
 
-### 3. Courbe précision/rappel pour validation si données déséquilibrées -------------------------------------------------- 
+### 3. Précision/rappel pour validation si données déséquilibrées -------------------------------------------------- 
+# Précision : 
+# Haute précision : le modèle fait peu d'erreurs lorsqu'il prédit la classe positive. Cela signifie que les échantillons classés comme positifs sont généralement corrects.
+# Basse précision : le modèle fait de nombreuses erreurs en classant comme positifs des échantillons qui ne le sont pas, ce qui signifie qu'il produit beaucoup de faux positifs.
+
+# Sensibilité/Rappel
+# Haut rappel : le modèle identifie bien les cas positifs, minimisant les faux négatifs.
+# Bas rappel : le modèle manque de nombreux exemples de la classe positive, produisant beaucoup de faux négatifs.
+
+#### =============== SCORES ===============
 precision_per_class = []
 recall_per_class = []
 
@@ -709,7 +711,6 @@ for i in range(nb_class):
     print(f"  Rappel : {recall:.2f}")
     print(" ")
 
-# Tracer les scores de précision et de rappel
 x = np.arange(nb_class)  # l'emplacement des classes
 width = 0.35  # largeur des barres
 
@@ -717,7 +718,6 @@ fig, ax = plt.subplots(figsize=(10, 6))
 bars1 = ax.bar(x - width/2, precision_per_class, width, label='Précision', color='blue')
 bars2 = ax.bar(x + width/2, recall_per_class, width, label='Rappel', color='orange')
 
-# Ajouter des étiquettes et un titre
 ax.set_xlabel('Classes')
 ax.set_ylabel('Scores')
 ax.set_title('Précision et Rappel par Classe')
@@ -729,33 +729,154 @@ ax.legend()
 for bar in bars1:
     yval = bar.get_height()
     ax.text(bar.get_x() + bar.get_width()/2, yval, round(yval, 2), ha='center', va='bottom')
-
 for bar in bars2:
     yval = bar.get_height()
     ax.text(bar.get_x() + bar.get_width()/2, yval, round(yval, 2), ha='center', va='bottom')
-
 plt.show()
+
+#### =============== CURVES ===============
+
+plt.figure(figsize=(10, 8))
+
+for class_index in range(nb_class):
+    precision, recall, thresholds = precision_recall_curve(y_test_true == class_index, y_test_pred_prob[:, class_index])
+    average_precision = average_precision_score(y_test_true == class_index, y_test_pred_prob[:, class_index])
+    
+    plt.plot(recall, precision, marker='.', label=f'Classe {class_names[class_index]} (AP = {average_precision:.2f})')
+
+plt.xlabel('Rappel')
+plt.ylabel('Précision')
+plt.title('Courbe Précision-Rappel pour toutes les classes')
+plt.legend()
+plt.grid()
+plt.show()
+
 
 ## 4. ROC curve et AUC ----------------------------------------------------------------------------------------------------------------------------- 
-y_scores = model_final.predict(test_generator)[:, 1]  # Récupérer les scores de probabilité pour la classe positive
-
-fpr, tpr, thresholds = roc_curve(y_test_true, y_scores)
-roc_auc = auc(fpr, tpr)
+# curve  = taux de vrais positif (sensibilité/rappel) en fonction du taux de faux positifs
+#  La courbe est tracée en changeant le seuil de classification et en calculant le TPR et le FPR pour chaque seuil. 
+# Plus la courbe est proche du coin supérieur gauche du graphique (0,1), meilleure est la performance du modèle
 
 plt.figure(figsize=(10, 6))
-plt.plot(fpr, tpr, color='blue', label='Courbe ROC (AUC = {:.2f})'.format(roc_auc))
-plt.plot([0, 1], [0, 1], color='red', linestyle='--')  # ligne de base
-plt.xlabel('Faux Positifs (FPR)')
-plt.ylabel('Vrais Positifs (TPR)')
-plt.title('Courbe ROC')
-plt.legend()
+
+for i in range(nb_class):
+    fpr, tpr, thresholds = roc_curve(y_test_true, y_test_pred_prob[:, i], pos_label=i)
+    roc_auc = auc(fpr, tpr)
+    plt.plot(fpr, tpr, label=f'ROC curve pour {class_names[i]} (AUC = {roc_auc:.2f})')
+
+# Ajouter des éléments au graphique
+plt.plot([0, 1], [0, 1], 'k--')  # ligne diagonale
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('Taux de faux positifs')
+plt.ylabel('Taux de vrais positifs')
+plt.title('Courbes ROC par classe')
+plt.legend(loc="lower right")
 plt.show()
 
-### 5. F1 Score ---------------------------------------------------------------------------------------------------- 
-f1 = f1_score(y_test_true, y_test_pred_classes, average='weighted')
-print(f"F1 Score: {f1}")
+# AUC est un indicateur de performance. Elle varie entre 0 et 1 :
+# AUC = 0.5 : Le modèle n'a pas de pouvoir discriminant, équivalent à un tirage aléatoire.
+# AUC < 0.5 : Le modèle est moins performant qu'un modèle aléatoire.
+# AUC = 1 : Le modèle fait une classification parfaite.
 
+### 5. F1 Score ---------------------------------------------------------------------------------------------------- 
+# Calcul du F1 score
+f1_per_class = f1_score(y_test_true, y_test_pred_classes, average=None)  # F1 score pour chaque classe
+f1_weighted = f1_score(y_test_true, y_test_pred_classes, average='weighted')  # F1 score global
+
+# Affichage des résultats
+for i, class_name in enumerate(class_names):
+    print(f"F1 Score pour {class_name}: {f1_per_class[i]:.2f}")
+
+print(f"F1 Score global (weighted): {f1_weighted:.2f}")
 
 
 os.kill(os.getpid(), signal.SIGKILL)
+
+
+
+
+
+
+
+
+
+
+
+
+sys.exit()
+
+############## KERAS TUNER POUR AJUSTEMENT HYPERPARAMS :  
+# from keras.models import Model
+# from keras.layers import Input, Conv2D, MaxPooling2D, Dropout, Flatten, Dense, Activation
+# from kerastuner import RandomSearch
+
+# def build_model(hp):
+#     # Définir l'entrée du modèle
+#     model_input = Input(shape=(img_width, img_height, 3))  # 3 car RVB
+
+#     # 1ère couche : convolution + activation ReLU + max-pooling + Dropout
+#     nb_filtre_1 = hp.Int('nb_filtre_1', 16, 64, step=16)
+#     taille_filtre_1 = hp.Choice('taille_filtre_1', [(3, 3), (5, 5)])
+#     model = Conv2D(nb_filtre_1, taille_filtre_1, padding="same")(model_input)
+#     model = Activation("relu")(model)
+#     model = MaxPooling2D(pool_size=taille_pool_size)(model)
+#     model = Dropout(hp.Float('dropout_1', 0.1, 0.5, step=0.1))(model)
+
+#     # 2ème couche : convolution + activation ReLU + max-pooling + Dropout
+#     nb_filtre_2 = hp.Int('nb_filtre_2', 32, 128, step=16)
+#     taille_filtre_2 = hp.Choice('taille_filtre_2', [(3, 3), (5, 5)])
+#     model = Conv2D(nb_filtre_2, taille_filtre_2, padding="same")(model)
+#     model = Activation("relu")(model)
+#     model = MaxPooling2D(pool_size=taille_pool_size)(model)
+#     model = Dropout(hp.Float('dropout_2', 0.1, 0.5, step=0.1))(model)
+
+#     # 3ème couche : convolution + activation ReLU + max-pooling + Dropout
+#     nb_filtre_3 = hp.Int('nb_filtre_3', 64, 256, step=16)
+#     taille_filtre_3 = hp.Choice('taille_filtre_3', [(3, 3), (5, 5)])
+#     model = Conv2D(nb_filtre_3, taille_filtre_3, padding="same")(model)
+#     model = Activation("relu")(model)
+#     model = MaxPooling2D(pool_size=taille_pool_size)(model)
+#     model = Dropout(hp.Float('dropout_3', 0.1, 0.5, step=0.1))(model)
+
+#     # 4ème couche : applatissement + couche Dense + activation ReLU + Dropout
+#     model = Flatten()(model)
+#     nb_neurones_dense = hp.Int('nb_neurones_dense', 32, 128, step=32)
+#     model = Dense(nb_neurones_dense)(model)
+#     model = Activation("relu")(model)
+#     model = Dropout(hp.Float('dropout_dense', 0.1, 0.5, step=0.1))(model)
+
+#     # Output
+#     model = Dense(nb_class)(model)
+#     model_output = Activation("softmax")(model)
+
+#     # Créer le modèle final
+#     model_final = Model(model_input, model_output)
+
+#     # Compiler le modèle
+#     model_final.compile(optimizer=keras.optimizers.Adam(hp.Float('learning_rate', 1e-4, 1e-2, sampling='LOG')),
+#                         loss='sparse_categorical_crossentropy',  # ou 'categorical_crossentropy' selon vos étiquettes
+#                         metrics=['accuracy'])
+
+#     return model_final
+
+# # Configuration du Keras Tuner
+# tuner = RandomSearch(
+#     build_model,
+#     objective='val_accuracy',  # Ou 'val_loss' selon ce que vous voulez maximiser
+#     max_trials=10,  # Nombre d'architectures à tester
+#     executions_per_trial=2,  # Exécuter chaque architecture plusieurs fois pour une évaluation plus stable
+#     directory='my_dir',  # Répertoire pour stocker les résultats
+#     project_name='helloworld'  # Nom du projet
+# )
+
+# # Rechercher les meilleurs hyperparamètres
+# tuner.search(x_train, y_train, epochs=10, validation_data=(x_val, y_val))
+
+
+
+
+
+
+
 
