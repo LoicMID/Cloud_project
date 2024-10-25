@@ -1,4 +1,5 @@
 import os, signal
+import pickle
 # os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import sys
 import zipfile
@@ -60,18 +61,18 @@ class_names = ["clear","partly_cloudy","cloudy","haze"]
 # Tailles de batch moyennes (128 - 256) : un bon compromis entre stabilité et efficacité, souvent utilisé en pratique.
 # Grandes tailles de batch (512 et plus) : adaptées si le modèle est entraîné sur des données massives ou sur du matériel très performant, avec un apprentissage souvent plus stable.
 batch_size_mod = 256 # nb d'échantillons traités ensembles. Après avoir traité tout les lots = une époch complète 
-epoch_mod = 11 # nb de fois où les input sont pris en compte
+epoch_mod = 8 # nb de fois où les input sont pris en compte
 dropout_mod = 0.1
 learning_rate_mod = 0.001
 taille_lot_augm_train = 6000
 taille_lot_augm_valid = 1000
 
 # paramètres architecture model à ajouter
-nb_filtre_1, taille_filtre_1 = 16, (3,3) # pour couche convolution 1
-nb_filtre_2, taille_filtre_2 = 32, (3,3) # pour couche convolution 2
-nb_filtre_3, taille_filtre_3 = 64, (3,3) # pour couche convolution 3
+nb_filtre_1, taille_filtre_1 = 16, (5,5) # pour couche convolution 1
+nb_filtre_2, taille_filtre_2 = 16, (3,3) # pour couche convolution 2
+nb_filtre_3, taille_filtre_3 = 32, (3,3) # pour couche convolution 3
 taille_pool_size = (2,2) # ici chaque passage réduit la hauteur et la largeur de moitié
-nb_neurones_dense = 32 # pour couche dense 4
+nb_neurones_dense = 16 # pour couche dense 4
 
 ### Creation seed pour reproductibilité de l'aleatoire : a activer si besoin
 # random_seed = 42 #choix arbitraire de 42 
@@ -493,9 +494,16 @@ history = model_final.fit(
 # Sauvegarder le modèle entraîné
 date_str = datetime.now().strftime("%d_%m_%Hh%M")  # JJ_MM
 model_final.save(save_mod_dir + f"cloud_classifier_model_{date_str}_avec_{epoch_mod}_epochs.h5")
-
 # model_final = keras.models.load_model(save_mod_dir + "cloud_classifier_model_25_10_avec_10_epochs.h5") # pour load un model
 
+# Sauvegarde de l'historique
+with open('history.pkl', 'wb') as f:
+    pickle.dump(history.history, f)
+
+# # Rechargement de l'historique
+# with open('history.pkl', 'rb') as f:
+#     history = pickle.load(f)
+    
 sys.exit()
 
 # =============================================================================
@@ -657,6 +665,7 @@ for i in range(nb_class):
     FN = conf_matrix[i, :].sum() - TP  # Faux négatifs
     TN = conf_matrix.sum() - (FP + FN + TP)  # Vrais négatifs
     
+    print("\n")
     print(f"Classe {class_names[i]} :")
     print(f"  Vrais Positifs (TP): {TP}")
     print(f"  Faux Positifs (FP): {FP}")
@@ -715,8 +724,8 @@ x = np.arange(nb_class)  # l'emplacement des classes
 width = 0.35  # largeur des barres
 
 fig, ax = plt.subplots(figsize=(10, 6))
-bars1 = ax.bar(x - width/2, precision_per_class, width, label='Précision', color='blue')
-bars2 = ax.bar(x + width/2, recall_per_class, width, label='Rappel', color='orange')
+bars1 = ax.bar(x - width/2, precision_per_class, width, label='Précision', color='grey')
+bars2 = ax.bar(x + width/2, recall_per_class, width, label='Rappel', color='black')
 
 ax.set_xlabel('Classes')
 ax.set_ylabel('Scores')
@@ -790,93 +799,20 @@ for i, class_name in enumerate(class_names):
 
 print(f"F1 Score global (weighted): {f1_weighted:.2f}")
 
+plt.figure(figsize=(10, 6))
+bars = plt.bar(class_names, f1_per_class, color='skyblue', label='F1 Score par Classe')
+plt.axhline(y=f1_weighted, color='orange', linestyle='--', label=f"F1 Score Global (weighted) : {f1_weighted:.2f}")
 
-os.kill(os.getpid(), signal.SIGKILL)
+# Ajouter des annotations
+for bar, score in zip(bars, f1_per_class):
+    plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height() - 0.05, f"{score:.2f}", ha='center', va='bottom', color='black')
 
-
-
-
-
-
-
-
-
-
-
-
-sys.exit()
-
-############## KERAS TUNER POUR AJUSTEMENT HYPERPARAMS :  
-# from keras.models import Model
-# from keras.layers import Input, Conv2D, MaxPooling2D, Dropout, Flatten, Dense, Activation
-# from kerastuner import RandomSearch
-
-# def build_model(hp):
-#     # Définir l'entrée du modèle
-#     model_input = Input(shape=(img_width, img_height, 3))  # 3 car RVB
-
-#     # 1ère couche : convolution + activation ReLU + max-pooling + Dropout
-#     nb_filtre_1 = hp.Int('nb_filtre_1', 16, 64, step=16)
-#     taille_filtre_1 = hp.Choice('taille_filtre_1', [(3, 3), (5, 5)])
-#     model = Conv2D(nb_filtre_1, taille_filtre_1, padding="same")(model_input)
-#     model = Activation("relu")(model)
-#     model = MaxPooling2D(pool_size=taille_pool_size)(model)
-#     model = Dropout(hp.Float('dropout_1', 0.1, 0.5, step=0.1))(model)
-
-#     # 2ème couche : convolution + activation ReLU + max-pooling + Dropout
-#     nb_filtre_2 = hp.Int('nb_filtre_2', 32, 128, step=16)
-#     taille_filtre_2 = hp.Choice('taille_filtre_2', [(3, 3), (5, 5)])
-#     model = Conv2D(nb_filtre_2, taille_filtre_2, padding="same")(model)
-#     model = Activation("relu")(model)
-#     model = MaxPooling2D(pool_size=taille_pool_size)(model)
-#     model = Dropout(hp.Float('dropout_2', 0.1, 0.5, step=0.1))(model)
-
-#     # 3ème couche : convolution + activation ReLU + max-pooling + Dropout
-#     nb_filtre_3 = hp.Int('nb_filtre_3', 64, 256, step=16)
-#     taille_filtre_3 = hp.Choice('taille_filtre_3', [(3, 3), (5, 5)])
-#     model = Conv2D(nb_filtre_3, taille_filtre_3, padding="same")(model)
-#     model = Activation("relu")(model)
-#     model = MaxPooling2D(pool_size=taille_pool_size)(model)
-#     model = Dropout(hp.Float('dropout_3', 0.1, 0.5, step=0.1))(model)
-
-#     # 4ème couche : applatissement + couche Dense + activation ReLU + Dropout
-#     model = Flatten()(model)
-#     nb_neurones_dense = hp.Int('nb_neurones_dense', 32, 128, step=32)
-#     model = Dense(nb_neurones_dense)(model)
-#     model = Activation("relu")(model)
-#     model = Dropout(hp.Float('dropout_dense', 0.1, 0.5, step=0.1))(model)
-
-#     # Output
-#     model = Dense(nb_class)(model)
-#     model_output = Activation("softmax")(model)
-
-#     # Créer le modèle final
-#     model_final = Model(model_input, model_output)
-
-#     # Compiler le modèle
-#     model_final.compile(optimizer=keras.optimizers.Adam(hp.Float('learning_rate', 1e-4, 1e-2, sampling='LOG')),
-#                         loss='sparse_categorical_crossentropy',  # ou 'categorical_crossentropy' selon vos étiquettes
-#                         metrics=['accuracy'])
-
-#     return model_final
-
-# # Configuration du Keras Tuner
-# tuner = RandomSearch(
-#     build_model,
-#     objective='val_accuracy',  # Ou 'val_loss' selon ce que vous voulez maximiser
-#     max_trials=10,  # Nombre d'architectures à tester
-#     executions_per_trial=2,  # Exécuter chaque architecture plusieurs fois pour une évaluation plus stable
-#     directory='my_dir',  # Répertoire pour stocker les résultats
-#     project_name='helloworld'  # Nom du projet
-# )
-
-# # Rechercher les meilleurs hyperparamètres
-# tuner.search(x_train, y_train, epochs=10, validation_data=(x_val, y_val))
+plt.xlabel("Classes")
+plt.ylabel("F1 Score")
+plt.title("Histogramme des F1 Scores par Classe et F1 Score Global")
+plt.legend()
+plt.ylim(0, 1)  # Score F1 est entre 0 et 1
+plt.show()
 
 
-
-
-
-
-
-
+os.kill(os.getpid(), signal.SIGTERM)
